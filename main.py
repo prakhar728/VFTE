@@ -193,3 +193,16 @@ async def knowledge_endpoint(
     if body.vocab_terms:
         store.set_vocab(body.workspace, body.vocab_terms)
     return {"bound": bound, "not_found": not_found, "vocab_terms": len(body.vocab_terms)}
+
+
+@app.get("/v1/vocab/{workspace}")
+async def vocab_endpoint(
+    request: Request,
+    workspace: str,
+    caller: Caller = Depends(require_scope("vocab")),
+) -> dict:
+    """Recato reads a workspace's ASR vocab (terms + a ready-to-use prompt string)."""
+    if not caller.allows_workspace(workspace):
+        raise HTTPException(403, f"caller '{caller.name}' not authorized for workspace '{workspace}'")
+    terms = request.app.state.store.get_vocab(workspace)
+    return {"workspace": workspace, "terms": terms, "prompt": ", ".join(terms)}
