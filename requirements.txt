@@ -7,9 +7,8 @@ numpy>=1.26,<2.3
 # ID embedder (A.2): pure-numpy fbank → ONNX model (CPU). soundfile reads wavs.
 onnxruntime>=1.17
 soundfile>=0.12
+# voiceprint store (A.4): AES-256 at-rest encryption.
+cryptography>=42.0
 
 # --- added in later milestones ---
 #   scipy>=1.11            # clustering / signal (our ONNX diarizer, E.3)
-#   cryptography>=42.0     # AES-256 at-rest encryption of voiceprints (A.4)
-# M3 store:
-#   cryptography>=42.0     # AES-256 at-rest encryption of voiceprints
