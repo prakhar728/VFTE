@@ -45,5 +45,5 @@ SCORE_BETA = float(os.environ.get("FPM_SCORE_BETA", "-5.0"))
 # --- enrollment ---
 ENROLL_QUALITY_MIN = float(os.environ.get("FPM_ENROLL_QUALITY_MIN", "0.50"))  # min self-sim to centroid
 
-# --- diarizer engine (offline path) — set after the C.2 diart spike ---
-DIARIZATION_ENGINE = os.environ.get("FPM_DIARIZER", "TBD")     # diart | onnx
+# --- diarizer engine (offline path) — diart chosen at the C.2 spike (real-time on CPU) ---
+DIARIZATION_ENGINE = os.environ.get("FPM_DIARIZER", "diart")   # diart | onnx (E.3)
