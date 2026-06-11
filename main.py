@@ -26,6 +26,7 @@ from fpm.audio import AudioDecodeError, decode_to_mono
 from fpm.embed.onnx_embedder import OnnxSpeakerEmbedder
 from fpm.enroll import enroll
 from fpm.identify import SessionIdentifier
+from fpm.match import classify
 from fpm.store.store import VoiceprintStore
 from ratelimit import RateLimiter
 
@@ -137,6 +138,62 @@ async def enroll_endpoint(
         config.TARGET_SAMPLE_RATE, duration,
     )
     return {"voiceprint_id": result.voiceprint_id, "status": result.status, "reason": result.reason}
+
+
+@app.get("/v1/voiceprints/{workspace}")
+async def voiceprints_endpoint(
+    request: Request,
+    workspace: str,
+    caller: Caller = Depends(require_scope("voiceprints")),
+) -> dict:
+    """List the workspace's stored fingerprints (metadata only — no centroid/exemplar bytes)."""
+    if not caller.allows_workspace(workspace):
+        raise HTTPException(403, f"caller '{caller.name}' not authorized for workspace '{workspace}'")
+    store = request.app.state.store
+    out = []
+    for vid in store.list_ids(workspace):
+        vp = store.get(workspace, vid)
+        if vp is None:
+            continue
+        out.append({
+            "voiceprint_id": vp.voiceprint_id,
+            "name": vp.name or None,
+            "enroll_count": vp.enroll_count,
+            "exemplar_count": len(vp.exemplars),
+            "quality_score": round(vp.quality_score, 4),
+            "last_seen_at": vp.last_seen_at,
+        })
+    return {"workspace": workspace, "count": len(out), "voiceprints": out}
+
+
+@app.post("/v1/identify", dependencies=[Depends(enforce_write_limit)])
+async def identify_endpoint(
+    request: Request,
+    file: UploadFile,
+    workspace: str = Form(...),
+    caller: Caller = Depends(require_scope("identify")),
+) -> dict:
+    """Recognize a single clip against the workspace's enrolled voiceprints (no diarization)."""
+    if not caller.allows_workspace(workspace):
+        raise HTTPException(403, f"caller '{caller.name}' not authorized for workspace '{workspace}'")
+    embedder = getattr(request.app.state, "embedder", None)
+    if embedder is None:
+        raise HTTPException(503, "ID embedder not loaded")
+    try:
+        audio = decode_to_mono(await file.read())
+    except AudioDecodeError as exc:
+        raise HTTPException(400, f"audio decode failed: {exc}")
+    emb = embedder.extract(audio, config.TARGET_SAMPLE_RATE)
+    if emb is None:
+        return {"voiceprint_id": None, "name": None, "decision": "UNKNOWN",
+                "confidence": 0.0, "score": -1.0, "reason": "audio too short to embed"}
+    res = classify(emb, request.app.state.store.centroids(workspace))
+    name = None
+    if res.voiceprint_id:
+        vp = request.app.state.store.get(workspace, res.voiceprint_id)
+        name = (vp.name or None) if vp else None
+    return {"voiceprint_id": res.voiceprint_id, "name": name, "decision": res.decision,
+            "confidence": round(res.confidence, 4), "score": round(res.score, 4)}
 
 
 @app.post("/v1/diarize", dependencies=[Depends(enforce_write_limit)])

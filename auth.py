@@ -19,7 +19,7 @@ from dataclasses import dataclass
 
 from fastapi import HTTPException, Request
 
-VALID_ENDPOINTS = frozenset({"enroll", "diarize", "vocab", "knowledge"})
+VALID_ENDPOINTS = frozenset({"enroll", "diarize", "vocab", "knowledge", "voiceprints", "identify"})
 
 
 @dataclass(frozen=True)
