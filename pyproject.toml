@@ -1,0 +1,17 @@
+[project]
+name = "fpm"
+version = "0.0.1"
+description = "Speaker Fingerprinting Microservice — offline batch diarization + persistent voiceprint identification"
+requires-python = ">=3.11,<3.13"
+
+# Runtime/dev dependencies are pinned in requirements*.txt (not here) so the
+# Docker image and CI install from a single, explicit lock surface.
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = "-q"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"

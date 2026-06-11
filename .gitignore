@@ -1,0 +1,30 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# venv
+.venv/
+venv/
+
+# local data & secrets — never commit voiceprints/keys
+data/
+*.db
+*.db-wal
+*.db-shm
+.env
+*.key
+
+# model weights (baked into image, not the repo)
+models/
+*.onnx
+*.onnx.data
+
+# eval corpora (downloaded, not vendored)
+eval_data/
+
+# OS
+.DS_Store

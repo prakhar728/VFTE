@@ -1,0 +1,4 @@
+# Test/dev dependencies.
+pytest>=8.0
+httpx>=0.27          # FastAPI TestClient
+ruff>=0.6            # lint/format
