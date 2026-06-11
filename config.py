@@ -27,6 +27,12 @@ MODELS_DIR = Path(os.environ.get("FPM_MODELS_DIR", "./models"))
 ID_EMBEDDING_MODEL = os.environ.get("FPM_ID_EMBED", "campplus")
 ID_EMBEDDER_PATH = MODELS_DIR / f"{ID_EMBEDDING_MODEL}.onnx"
 ID_EMBEDDING_DIM = int(os.environ.get("FPM_ID_EMBED_DIM", "512"))
+# Embedding-window canonicalization: CAM++ embeds variable-length spans unstably
+# (a partial span of a voice can score ~0 against that same voice — see
+# docs/embedder-bench.md). We embed fixed-length windows and average, so enroll
+# (clip) and identify (arbitrary diarized span) live in the SAME space. 0 = off.
+EMBED_WINDOW_SEC = float(os.environ.get("FPM_EMBED_WINDOW_SEC", "2.0"))
+EMBED_HOP_SEC = float(os.environ.get("FPM_EMBED_HOP_SEC", "1.0"))
 
 # --- matching / open-set rejection (raw-cosine tiers; calibrated in E.1) ---
 MATCH_ACCEPT = float(os.environ.get("FPM_MATCH_ACCEPT", "0.45"))      # ≥ → MATCH

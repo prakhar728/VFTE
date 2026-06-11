@@ -32,7 +32,17 @@ point than WeSpeaker's internal fbank (e.g. same-spk 0.62 vs 0.94). Irrelevant: 
 OWN thresholds on our OWN embeddings (sigmoid-calibrated cosine + open-set, A.7/E.1). If the
 E.1 EER shows headroom lost to fbank mismatch, match WeSpeaker's fbank params then.
 
-## ⚠ FLAG (found during C.5): embedding unstable on partial sub-spans of short clips
+## ✅ RESOLVED (fixed-window embedding): instability on variable-length spans
+
+**Fix shipped.** `OnnxSpeakerEmbedder.extract` now embeds fixed-length windows
+(`EMBED_WINDOW_SEC=2.0`, `EMBED_HOP_SEC=1.0`) and averages them, so an enrolled
+clip and an arbitrary diarized span map into the same space. Validated on the live
+diart→identify e2e: the enrolled speaker is recognized by name (cos→centroid
+~0.99–1.00) while a different speaker stays anonymous (~0.01) — clean separation
+preserved. Set `FPM_EMBED_WINDOW_SEC=0` to disable. The cos-vs-length study below
+is what motivated it; E.1 still owns the systematic FAR/FRR calibration.
+
+### Original finding — embedding unstable on partial sub-spans of short clips
 Re-embedding a *sub-span* of one of the 4 s AMI fixtures can collapse the embedding. Same
 speaker, same source `spkA_1`:
 
@@ -51,11 +61,18 @@ orthogonal to the same speaker's full clip. Clean halves (198 frames) are fine. 
 classify, and vote correctly; the vote-lock + multi-segment accumulation is exactly the
 mitigation for occasional bad embeddings, which is why the full pipeline still converges.
 
-**Why it matters:** the real diart path emits variable-length spans, so some will land on bad
-operating points → noisy single-segment scores → slower locks / occasional misroutes.
-**Likely cause:** length/offset-dependent CMN or a degenerate pooling window in the fbank→CAM++
-front-end on very short inputs. **Action (E.1):** characterize cos-vs-length systematically on a
-real multi-speaker set; candidate fixes — enforce a min embed window (e.g. ≥2 s, pad/center short
-spans), revisit CMN normalization, or match WeSpeaker's fbank. Tracked as input to E.1
-calibration; does NOT block Milestone C. (Tests deliberately embed full-clip spans to isolate the
-relabel/identify logic from this artifact.)
+**Why it mattered:** the real diart path emits variable-length spans, so without the fix even the
+enrolled speaker fell through to anonymous (observed: Alice's own turns scored ~0.02 to her print).
+**Cause:** length/offset-dependent CMN + shape-sensitivity in the fbank→CAM++ front-end on whole
+variable-length spans. **Fix (above):** average fixed 2 s windows + keep CMN — robust (0.96 vs
+0.08) while preserving separation. The bake-off that picked it:
+
+| strategy | partial-span (broken case) | same-speaker | different-speaker |
+|---|---|---|---|
+| full + CMN (old) | 0.08 | 0.62 | −0.00 |
+| full, no CMN | 0.53 | 0.59 | 0.74 ✗ (separation lost) |
+| **fixed-2s avg + CMN (chosen)** | **0.96** | 0.60 | **0.01** |
+| fixed-2s, no CMN | 0.98 | 0.58 | 0.75 ✗ |
+
+E.1 still owns systematic FAR/FRR calibration on a real multi-speaker set (and may revisit window
+length). Tests embed full-clip spans where they isolate non-embedder logic.
