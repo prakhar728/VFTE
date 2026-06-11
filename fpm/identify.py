@@ -24,6 +24,13 @@ stream length — so state stays flat over an arbitrarily long meeting.
 
 Engine-independent: identity ALWAYS re-embeds with CAM++ from the raw segment
 audio; the diarizer's own embeddings never enter the store.
+
+Correction (C.5): live emissions are *provisional*. The session keeps a running
+transcript; when a `local_speaker` finally locks, earlier provisional chunks for
+that speaker are retro-relabelled to the resolved identity. `transcript()` is the
+authoritative corrected view; `seal()` drains the stream, freezes corrections,
+and returns the final transcript. An anonymous voiceprint can be named later via
+the knowledge channel (`store.set_name`) and is then recognised by name.
 """
 from __future__ import annotations
 
@@ -82,15 +89,39 @@ class SessionIdentifier:
         self._votes: dict[str, Counter] = {}
         self._exemplars: dict[str, list[np.ndarray]] = {}
         self._locked: dict[str, IdentifiedSegment] = {}  # local_speaker → resolved label
+        self._history: list[IdentifiedSegment] = []      # running session transcript
         self._max_buf = int(BUFFER_SEC * self._sr)
+        self._finished = False
+        self._sealed = False
 
     def feed(self, chunk: np.ndarray, sample_rate: int = 16_000) -> list[IdentifiedSegment]:
         block = np.asarray(chunk, dtype=np.float32).ravel()
         self._append(block)
-        return [self._identify(s) for s in self._diarizer.feed(block, sample_rate)]
+        return self._consume(self._diarizer.feed(block, sample_rate))
 
     def finish(self) -> list[IdentifiedSegment]:
-        return [self._identify(s) for s in self._diarizer.finish()]
+        if self._finished:
+            return []
+        self._finished = True
+        return self._consume(self._diarizer.finish())
+
+    def _consume(self, segs: list[Segment]) -> list[IdentifiedSegment]:
+        out = []
+        for s in segs:
+            r = self._identify(s)
+            self._history.append(r)   # append before the next lock so relabel sees it
+            out.append(r)
+        return out
+
+    def transcript(self) -> list[IdentifiedSegment]:
+        """The corrected session transcript (relabels applied in place)."""
+        return list(self._history)
+
+    def seal(self) -> list[IdentifiedSegment]:
+        """Drain the stream, freeze corrections, return the final transcript."""
+        self.finish()
+        self._sealed = True
+        return self.transcript()
 
     # ── bounded trailing audio buffer ────────────────────────
 
@@ -160,7 +191,21 @@ class SessionIdentifier:
         else:
             label = IdentifiedSegment(0, 0, spk, cand, self._name_of(cand), "MATCH", confidence)
         self._locked[spk] = label
+        self._relabel_history(spk, label)
         return label
+
+    def _relabel_history(self, spk: str, label: IdentifiedSegment) -> int:
+        """Retro-correct earlier provisional chunks for a speaker that just locked."""
+        if self._sealed:
+            return 0
+        n = 0
+        for h in self._history:
+            if h.local_speaker == spk and h.voiceprint_id != label.voiceprint_id:
+                h.voiceprint_id = label.voiceprint_id
+                h.name = label.name
+                h.decision = "RELABELED"
+                n += 1
+        return n
 
     def _mint_anonymous(self, spk: str) -> str:
         vp = Voiceprint(new_voiceprint_id(), self._ws, name="")
