@@ -28,5 +28,16 @@ ID_EMBEDDING_MODEL = os.environ.get("FPM_ID_EMBED", "campplus")
 ID_EMBEDDER_PATH = MODELS_DIR / f"{ID_EMBEDDING_MODEL}.onnx"
 ID_EMBEDDING_DIM = int(os.environ.get("FPM_ID_EMBED_DIM", "512"))
 
+# --- matching / open-set rejection (raw-cosine tiers; calibrated in E.1) ---
+MATCH_ACCEPT = float(os.environ.get("FPM_MATCH_ACCEPT", "0.45"))      # ≥ → MATCH
+MATCH_REJECT = float(os.environ.get("FPM_MATCH_REJECT", "0.35"))      # < → UNKNOWN
+AMBIGUOUS_MARGIN = float(os.environ.get("FPM_AMBIGUOUS_MARGIN", "0.10"))  # best within this of 2nd → AMBIGUOUS
+# sigmoid-calibrated confidence: conf = sigmoid(alpha*cos + beta)
+SCORE_ALPHA = float(os.environ.get("FPM_SCORE_ALPHA", "12.0"))
+SCORE_BETA = float(os.environ.get("FPM_SCORE_BETA", "-5.0"))
+
+# --- enrollment ---
+ENROLL_QUALITY_MIN = float(os.environ.get("FPM_ENROLL_QUALITY_MIN", "0.50"))  # min self-sim to centroid
+
 # --- diarizer engine (offline path) — set after the C.2 diart spike ---
 DIARIZATION_ENGINE = os.environ.get("FPM_DIARIZER", "TBD")     # diart | onnx
