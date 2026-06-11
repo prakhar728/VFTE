@@ -17,6 +17,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import Depends, FastAPI, Form, HTTPException, Request, UploadFile
 from fastapi.responses import StreamingResponse
+from pydantic import BaseModel, Field
 
 import config
 from auth import Caller, TokenAuth, require_scope
@@ -157,3 +158,38 @@ async def diarize_endpoint(
                           "segments": [_segment_dict(s) for s in ident.transcript()]}) + "\n"
 
     return StreamingResponse(stream(), media_type="application/x-ndjson")
+
+
+class Binding(BaseModel):
+    voiceprint_id: str
+    name: str
+
+
+class KnowledgeRequest(BaseModel):
+    workspace: str
+    bindings: list[Binding] = Field(default_factory=list)
+    vocab_terms: list[str] = Field(default_factory=list)
+
+
+@app.post("/v1/knowledge")
+async def knowledge_endpoint(
+    request: Request,
+    body: KnowledgeRequest,
+    caller: Caller = Depends(require_scope("knowledge")),
+) -> dict:
+    """Conclave→FPM (one-way): name anonymous voiceprints + push ASR vocab.
+
+    Each binding is workspace-checked and audited in the store; binding a name a
+    voiceprint already has, or one not in this workspace, is a no-op (returns it in
+    `not_found`). Re-binding is allowed (reversible) and leaves an audit trail.
+    """
+    if not caller.allows_workspace(body.workspace):
+        raise HTTPException(403, f"caller '{caller.name}' not authorized for workspace '{body.workspace}'")
+    store = request.app.state.store
+    bound, not_found = [], []
+    for b in body.bindings:
+        ok = store.set_name(body.workspace, b.voiceprint_id, b.name, actor=caller.name)
+        (bound if ok else not_found).append(b.voiceprint_id)
+    if body.vocab_terms:
+        store.set_vocab(body.workspace, body.vocab_terms)
+    return {"bound": bound, "not_found": not_found, "vocab_terms": len(body.vocab_terms)}

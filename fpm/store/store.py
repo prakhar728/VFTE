@@ -233,3 +233,15 @@ class VoiceprintStore:
             "SELECT terms FROM vocab WHERE workspace_id=?", (workspace_id,)
         ).fetchone()
         return json.loads(r[0]) if r else []
+
+    def audit_entries(self, workspace_id: str) -> list[dict]:
+        """Naming history for a workspace (oldest first) — bindings are reversible + traceable."""
+        cols = ("voiceprint_id", "old_name", "new_name", "actor", "ts")
+        return [
+            dict(zip(cols, row))
+            for row in self._conn.execute(
+                "SELECT voiceprint_id, old_name, new_name, actor, ts FROM binding_audit "
+                "WHERE workspace_id=? ORDER BY id",
+                (workspace_id,),
+            )
+        ]
