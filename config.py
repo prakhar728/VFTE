@@ -34,13 +34,15 @@ ID_EMBEDDING_DIM = int(os.environ.get("FPM_ID_EMBED_DIM", "512"))
 EMBED_WINDOW_SEC = float(os.environ.get("FPM_EMBED_WINDOW_SEC", "2.0"))
 EMBED_HOP_SEC = float(os.environ.get("FPM_EMBED_HOP_SEC", "1.0"))
 
-# --- matching / open-set rejection (raw-cosine tiers; calibrated in E.1) ---
+# --- matching / open-set rejection — CALIBRATED at E.1 (far-field AMI mix, 8 spk) ---
+# E.1: genuine cos mean 0.76, impostor 0.08, EER ~0.2% @ 0.42. ACCEPT 0.45 → FAR 0.3%/
+# FRR 0% (name-leak-averse); REJECT 0.35 → FAR 1.3%. See docs/id-eval.md.
 MATCH_ACCEPT = float(os.environ.get("FPM_MATCH_ACCEPT", "0.45"))      # ≥ → MATCH
 MATCH_REJECT = float(os.environ.get("FPM_MATCH_REJECT", "0.35"))      # < → UNKNOWN
 AMBIGUOUS_MARGIN = float(os.environ.get("FPM_AMBIGUOUS_MARGIN", "0.10"))  # best within this of 2nd → AMBIGUOUS
-# sigmoid-calibrated confidence: conf = sigmoid(alpha*cos + beta)
-SCORE_ALPHA = float(os.environ.get("FPM_SCORE_ALPHA", "12.0"))
-SCORE_BETA = float(os.environ.get("FPM_SCORE_BETA", "-5.0"))
+# sigmoid-calibrated confidence: conf = sigmoid(alpha*cos + beta); fitted at E.1
+SCORE_ALPHA = float(os.environ.get("FPM_SCORE_ALPHA", "15.5"))
+SCORE_BETA = float(os.environ.get("FPM_SCORE_BETA", "-7.67"))
 
 # --- enrollment ---
 ENROLL_QUALITY_MIN = float(os.environ.get("FPM_ENROLL_QUALITY_MIN", "0.50"))  # min self-sim to centroid
