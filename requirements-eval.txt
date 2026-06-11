@@ -1,0 +1,3 @@
+# Evaluation-only dependencies (the DER bake-off harness). Not needed at runtime.
+# pyannote.metrics is torch-free — it pulls pyannote.core + numpy/scipy/sklearn/pandas.
+pyannote.metrics>=4.1
