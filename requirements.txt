@@ -2,11 +2,13 @@
 fastapi>=0.115,<1.0
 uvicorn[standard]>=0.30,<1.0
 
+# M1 audio ingestion (C1.0): ffmpeg (system) decodes; numpy holds PCM.
+numpy>=1.26,<2.3
+
 # --- added in later milestones (listed here for visibility, uncommented when used) ---
-# M1 audio + diarization:
-#   numpy>=1.26,<2.3
+# M1 diarization:
 #   scipy>=1.11
-#   soundfile>=0.12        # audio decode (+ system ffmpeg for mp3/m4a/opus)
+#   soundfile>=0.12        # fast wav/flac read for eval corpora
 #   onnxruntime>=1.17      # ONNX embedders / VAD / segmentation (CPU)
 #   silero-vad>=5.1
 # M3 store:
