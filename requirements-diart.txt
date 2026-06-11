@@ -1,0 +1,22 @@
+# diart diarizer plug (offline path) — OPTIONAL, heavy (torch).
+# Kept OUT of the core requirements so the default service venv stays torch-free;
+# install only for the diart engine (config.FPM_DIARIZER=diart). The lean ONNX
+# engine (E.3) is the long-term torch-free replacement for the TEE image.
+#
+# Install into a SEPARATE venv:  pip install -r requirements-diart.txt
+# Pins are load-bearing: `pip install diart` alone pulls bleeding-edge deps that
+# break pyannote.audio 3.4.0 (see docs/spikes.md "C.2" for the why of each pin).
+
+diart==0.9.2
+torch==2.2.2
+torchaudio==2.2.2
+torchvision==0.17.2          # diart requires it; 2.11+ dropped torchaudio.AudioMetaData
+pytorch-lightning==2.2.1
+lightning==2.2.1             # 2.6 breaks on torch 2.2 _pytree API
+huggingface_hub==0.23.4      # 1.x dropped hf_hub_download(use_auth_token=)
+onnxruntime                  # wespeaker embedder loader
+
+# Models (diart-internal scissors only; identity always uses our CAM++):
+#   segmentation = pyannote/segmentation-3.0   (gated — accept terms, token needs gated-repo read)
+#   embedding    = pyannote/wespeaker-voxceleb-resnet34-LM  (ungated; pyannote loader, NOT speechbrain)
+# Runtime is offline: the adapter sets HF_HUB_OFFLINE=1, so models must be pre-cached/baked.
