@@ -16,18 +16,30 @@ import logging
 from contextlib import asynccontextmanager
 
 from fastapi import Depends, FastAPI, Form, HTTPException, Request, UploadFile
-from fastapi.responses import StreamingResponse
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 import config
-from auth import Caller, TokenAuth, require_scope
+from auth import Caller, TokenAuth, _extract_token, require_scope
 from fpm.audio import AudioDecodeError, decode_to_mono
 from fpm.embed.onnx_embedder import OnnxSpeakerEmbedder
 from fpm.enroll import enroll
 from fpm.identify import SessionIdentifier
 from fpm.store.store import VoiceprintStore
+from ratelimit import RateLimiter
 
 log = logging.getLogger(__name__)
+
+
+def enforce_write_limit(request: Request) -> None:
+    """Dependency on write endpoints: 429 once a caller exceeds its write budget."""
+    limiter = getattr(request.app.state, "rate_limiter", None)
+    if limiter is None:
+        return
+    key = _extract_token(request) or "anon"
+    if not limiter.allow(key):
+        raise HTTPException(429, "write rate limit exceeded; retry later")
 
 _FEED_SEC = 0.5  # chunk size the offline pipeline is fed at
 
@@ -61,6 +73,8 @@ async def lifespan(app: FastAPI):
         app.state.auth = TokenAuth.from_env()
     if not getattr(app.state, "diarizer_factory", None):
         app.state.diarizer_factory = _default_diarizer_factory
+    if not getattr(app.state, "rate_limiter", None):
+        app.state.rate_limiter = RateLimiter(config.RATE_LIMIT_WRITES, config.RATE_LIMIT_WINDOW_SEC)
     if not getattr(app.state, "store", None):
         app.state.store = VoiceprintStore().open()
     if not getattr(app.state, "embedder", None):
@@ -79,12 +93,27 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title=config.SERVICE_NAME, version=config.SERVICE_VERSION, lifespan=lifespan)
 
 
+@app.exception_handler(HTTPException)
+async def _http_error(request: Request, exc: HTTPException) -> JSONResponse:
+    """Uniform error envelope: {"error": {status, message}}."""
+    return JSONResponse(status_code=exc.status_code,
+                        content={"error": {"status": exc.status_code, "message": exc.detail}},
+                        headers=getattr(exc, "headers", None))
+
+
+@app.exception_handler(RequestValidationError)
+async def _validation_error(request: Request, exc: RequestValidationError) -> JSONResponse:
+    return JSONResponse(status_code=422,
+                        content={"error": {"status": 422, "message": "invalid request",
+                                           "detail": exc.errors()}})
+
+
 @app.get("/health")
 def health() -> dict:
     return {"status": "ok", "service": config.SERVICE_NAME, "version": config.SERVICE_VERSION}
 
 
-@app.post("/v1/enroll")
+@app.post("/v1/enroll", dependencies=[Depends(enforce_write_limit)])
 async def enroll_endpoint(
     request: Request,
     file: UploadFile,
@@ -110,7 +139,7 @@ async def enroll_endpoint(
     return {"voiceprint_id": result.voiceprint_id, "status": result.status, "reason": result.reason}
 
 
-@app.post("/v1/diarize")
+@app.post("/v1/diarize", dependencies=[Depends(enforce_write_limit)])
 async def diarize_endpoint(
     request: Request,
     file: UploadFile,
@@ -171,7 +200,7 @@ class KnowledgeRequest(BaseModel):
     vocab_terms: list[str] = Field(default_factory=list)
 
 
-@app.post("/v1/knowledge")
+@app.post("/v1/knowledge", dependencies=[Depends(enforce_write_limit)])
 async def knowledge_endpoint(
     request: Request,
     body: KnowledgeRequest,

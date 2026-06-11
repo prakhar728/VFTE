@@ -47,3 +47,7 @@ ENROLL_QUALITY_MIN = float(os.environ.get("FPM_ENROLL_QUALITY_MIN", "0.50"))  # 
 
 # --- diarizer engine (offline path) — diart chosen at the C.2 spike (real-time on CPU) ---
 DIARIZATION_ENGINE = os.environ.get("FPM_DIARIZER", "diart")   # diart | onnx (E.3)
+
+# --- write rate limiting (per caller token, fixed window) ---
+RATE_LIMIT_WRITES = int(os.environ.get("FPM_RATE_LIMIT_WRITES", "120"))
+RATE_LIMIT_WINDOW_SEC = float(os.environ.get("FPM_RATE_LIMIT_WINDOW_SEC", "60"))
