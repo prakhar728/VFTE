@@ -20,6 +20,13 @@ DB_PATH = DATA_DIR / "voiceprints.db"
 # --- audio ---
 TARGET_SAMPLE_RATE = 16_000  # all internal processing is 16 kHz mono
 
-# --- decided during the build (do not hardcode a winner here) ---
-DIARIZATION_ENGINE = os.environ.get("FPM_DIARIZER", "TBD")     # D1 / D2 / D3 — set after M2
-ID_EMBEDDING_MODEL = os.environ.get("FPM_ID_EMBED", "TBD")     # CAM++ / ERes2NetV2 — set after C3.1
+# --- models (fetched at build time via scripts/fetch_models.sh; baked into image) ---
+MODELS_DIR = Path(os.environ.get("FPM_MODELS_DIR", "./models"))
+# The FIXED ID embedder defines the voiceprint space. CAM++ (512-d) for now;
+# the CAM++ vs ERes2NetV2 bench (A.3) may revise this.
+ID_EMBEDDING_MODEL = os.environ.get("FPM_ID_EMBED", "campplus")
+ID_EMBEDDER_PATH = MODELS_DIR / f"{ID_EMBEDDING_MODEL}.onnx"
+ID_EMBEDDING_DIM = int(os.environ.get("FPM_ID_EMBED_DIM", "512"))
+
+# --- diarizer engine (offline path) — set after the C.2 diart spike ---
+DIARIZATION_ENGINE = os.environ.get("FPM_DIARIZER", "TBD")     # diart | onnx
