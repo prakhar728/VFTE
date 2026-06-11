@@ -6,12 +6,14 @@ import pytest
 from fastapi.testclient import TestClient
 
 import main
+from auth import Caller, TokenAuth
 from fpm.embed.onnx_embedder import OnnxSpeakerEmbedder
 from fpm.store.store import VoiceprintStore
 
 ROOT = Path(__file__).resolve().parents[1]
 MODEL = ROOT / "models" / "campplus.onnx"
 FIX = Path(__file__).parent / "fixtures" / "speakers"
+RECATO = "tok-recato"
 
 pytestmark = pytest.mark.skipif(
     not MODEL.exists(), reason="embedder model missing — run scripts/fetch_models.sh"
@@ -22,18 +24,22 @@ pytestmark = pytest.mark.skipif(
 def client(tmp_path):
     main.app.state.store = VoiceprintStore(db_path=tmp_path / "vp.db", key=os.urandom(32)).open()
     main.app.state.embedder = OnnxSpeakerEmbedder(MODEL).load()
+    main.app.state.auth = TokenAuth({RECATO: Caller("recato", frozenset({"enroll", "diarize"}))})
     with TestClient(main.app) as c:
         yield c
     main.app.state.store = None
     main.app.state.embedder = None
+    main.app.state.auth = None
 
 
-def _enroll(client, name, identity, ws="ws1"):
+def _enroll(client, name, identity, ws="ws1", token=RECATO):
+    headers = {"Authorization": f"Bearer {token}"} if token else {}
     with open(FIX / f"{name}.wav", "rb") as fh:
         return client.post(
             "/v1/enroll",
             files={"file": (f"{name}.wav", fh, "audio/wav")},
             data={"identity": identity, "workspace": ws},
+            headers=headers,
         )
 
 

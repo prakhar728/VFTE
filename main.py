@@ -14,9 +14,10 @@ from __future__ import annotations
 import logging
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Form, HTTPException, Request, UploadFile
+from fastapi import Depends, FastAPI, Form, HTTPException, Request, UploadFile
 
 import config
+from auth import Caller, TokenAuth, require_scope
 from fpm.audio import AudioDecodeError, decode_to_mono
 from fpm.embed.onnx_embedder import OnnxSpeakerEmbedder
 from fpm.enroll import enroll
@@ -27,7 +28,9 @@ log = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Respect pre-set state (tests inject a tmp store / embedder).
+    # Respect pre-set state (tests inject a tmp store / embedder / auth).
+    if not getattr(app.state, "auth", None):
+        app.state.auth = TokenAuth.from_env()
     if not getattr(app.state, "store", None):
         app.state.store = VoiceprintStore().open()
     if not getattr(app.state, "embedder", None):
@@ -57,8 +60,11 @@ async def enroll_endpoint(
     file: UploadFile,
     identity: str = Form(...),
     workspace: str = Form(...),
+    caller: Caller = Depends(require_scope("enroll")),
 ) -> dict:
     """gmeet path: a clip already attributed to `identity` → enroll its voiceprint."""
+    if not caller.allows_workspace(workspace):
+        raise HTTPException(403, f"caller '{caller.name}' not authorized for workspace '{workspace}'")
     embedder = getattr(request.app.state, "embedder", None)
     if embedder is None:
         raise HTTPException(503, "ID embedder not loaded")
