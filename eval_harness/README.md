@@ -12,11 +12,21 @@ FPM's diart + identify internals. Each experiment is a self-describing folder.
 1. Pick / create an experiment folder under `experiments/<name>/` (the assistant makes `gold.txt`
    + `config.yaml`).
 2. Drop your recording as `experiments/<name>/audio.wav`.
-3. Run it:
+3. Run it (the harness needs the eval venv with faster-whisper + diart):
    ```
-   python -m eval_harness.run experiments/<name>
+   cd FPM
+   HF_TOKEN=$(cat ~/.cache/huggingface/token) PYTHONPATH=$(pwd) \
+     /tmp/diart-venv/bin/python -m eval_harness.run experiments/<name>
    ```
 4. Read `experiments/<name>/results/result.json` (metrics) + `transcript.txt` (attributed output).
+
+`large-v3-turbo` is already cached locally (same repo Recato resolves it to). The vocab compare
+(`asr.vocab_compare: true`) runs Whisper twice (on + off) — slower on CPU but gives the WER delta.
+
+## Window-comparison example
+`experiments/diart-2min-window/` reuses the eval-conversation audio + gold and only changes
+`diarizer.window_sec: 120` — drop the recording once at `experiments/eval-conversation/audio.wav`,
+then run both to compare a 2-min window vs the 5s baseline (same audio).
 
 ## What an experiment folder holds
 ```

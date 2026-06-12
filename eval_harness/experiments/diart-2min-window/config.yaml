@@ -1,0 +1,20 @@
+name: diart-2min-window
+# Reuses the eval-conversation recording + gold (drop audio there once) — only the window changes,
+# so you can compare a large 2-min diart window vs the 5s baseline on the SAME audio.
+audio: ../eval-conversation/audio.wav
+gold: ../eval-conversation/gold.txt
+mode: offline
+
+asr:
+  model: large-v3-turbo
+  compute_type: int8
+  device: cpu
+  vocab: [Recato, Priya, Arjun, Sunnyvale, cortado]
+  vocab_compare: true
+
+diarizer:
+  engine: diart
+  window_sec: 120         # the experiment: does more context beat 5s? (diart's segmentation model
+  step_sec: 0.5           #   may not love a 120s window — that finding is itself the result)
+
+notes: "diart 120s window vs the 5s baseline, same audio/gold"
