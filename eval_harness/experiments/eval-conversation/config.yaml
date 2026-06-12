@@ -1,0 +1,18 @@
+name: eval-conversation
+audio: audio.wav          # drop your recording here (gitignored)
+gold: gold.txt
+mode: offline             # offline | realtime
+
+asr:
+  model: large-v3-turbo   # the exact Recato Whisper model
+  compute_type: int8
+  device: cpu
+  vocab: [Recato, Priya, Arjun, Sunnyvale, cortado]   # proper nouns a plain ASR fumbles
+  vocab_compare: true     # run vocab-on AND vocab-off, report the WER delta
+
+diarizer:
+  engine: diart           # diart | diarizen (later)
+  window_sec: 5           # try 120 for the 2-min-window experiment
+  step_sec: 0.5
+
+notes: "diart 5s baseline; vocab on/off on the eval-conversation script"

@@ -26,5 +26,9 @@ models/
 # eval corpora (downloaded, not vendored)
 eval_data/
 
+# eval harness experiment artifacts (recordings + run outputs; gold + config ARE committed)
+eval_harness/experiments/*/audio.*
+eval_harness/experiments/*/results/
+
 # OS
 .DS_Store
