@@ -57,6 +57,7 @@ class DiartDiarizer(StreamingDiarizer):
         embedding: str = DEFAULT_EMBEDDING,
         step: float = 0.5,
         latency: float = 0.5,
+        duration: float | None = None,   # diart window (None = diart default ~5s); eval knob
         sample_rate: int = 16_000,
         hf_token: str | None = None,
         offline: bool = True,
@@ -65,6 +66,7 @@ class DiartDiarizer(StreamingDiarizer):
         self._embedding = embedding
         self._step = step
         self._latency = latency
+        self._duration = duration
         self._sample_rate = sample_rate
         self._hf_token = hf_token or os.environ.get("HF_TOKEN")
         self._offline = offline
@@ -89,12 +91,14 @@ class DiartDiarizer(StreamingDiarizer):
 
         seg = dm.SegmentationModel.from_pretrained(self._segmentation, use_hf_token=self._hf_token)
         emb = dm.EmbeddingModel.from_pretrained(self._embedding, use_hf_token=self._hf_token)
-        cfg = SpeakerDiarizationConfig(
+        cfg_kwargs = dict(
             segmentation=seg, embedding=emb,
             step=self._step, latency=self._latency,
             device=torch.device("cpu"),
         )
-        return SpeakerDiarization(cfg)
+        if self._duration is not None:
+            cfg_kwargs["duration"] = self._duration   # override diart's default window
+        return SpeakerDiarization(SpeakerDiarizationConfig(**cfg_kwargs))
 
     def _build_stream(self):
         import rx
