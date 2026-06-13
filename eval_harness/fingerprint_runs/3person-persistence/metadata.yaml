@@ -1,0 +1,46 @@
+name: 3person-persistence
+tag: first-run-ian          # batch label for this round of fingerprint-persistence runs
+type: fingerprint-persistence
+description: >
+  A 3-person in-person conversation with NO reference transcript. This is not a WER/diarization
+  experiment — it tests the FPM voiceprint product: enroll the three voices from a short clip,
+  then check whether those fingerprints still identify the same three people minutes later in the
+  SAME conversation. The question: does a 2-minute enrollment hold up over the "future minutes"?
+
+# ── the original recording ──────────────────────────────────────────────
+# DROP THE LONG RECORDING HERE → source/  (any container ffmpeg reads: m4a/mp3/wav/aac/…).
+# It is gitignored (can be large / sensitive); only this metadata + README are committed.
+source:
+  file: source/            # put the file in this folder; the splitter auto-detects the one audio file
+  speakers: 3
+  transcript: none         # no gold — success is fingerprint CONSISTENCY, not text accuracy
+
+# ── how the audio gets cut up ───────────────────────────────────────────
+# ~10-min recording → three growing pieces: 1-min enroll, then 3-min and 6-min "future" windows.
+# Times are seconds; end_sec null = run to the end of the file (so the "ish" tail is included).
+segmentation:
+  segments:
+    - { name: "00_enroll_000-060s", start_sec: 0,   end_sec: 60,   role: enroll }    # 1 min
+    - { name: "01_test_060-240s",   start_sec: 60,  end_sec: 240,  role: identify }   # 3 min
+    - { name: "02_test_240-end",    start_sec: 240, end_sec: null, role: identify }   # ~6 min (to EOF)
+
+# ── the test ────────────────────────────────────────────────────────────
+method:
+  enroll:   "diarize piece 0 → 3 engine-local speakers → CAM++ embed each → register as 3 voiceprints"
+  identify: "diarize each later piece → embed each speaker → open-set match vs the 3 enrolled prints"
+  success:  "later-piece speakers map back to the SAME three enrolled ids, consistently across pieces"
+
+# Second objective, riding on the growing piece lengths (1 / 3 / 6 min): measure how processing
+# latency scales with clip duration. Each piece records asr_sec / diarize_sec / total_sec + RTF;
+# a plot (results/latency.png) graphs latency vs piece duration so we can see how it grows.
+latency_analysis:
+  durations_min: [1, 3, 6]
+  capture: [asr_sec, diarize_sec, total_sec, rtf, peak_rss_mb]
+  plot: results/latency.png
+
+participants:                # fill in once known; ok to leave as S1/S2/S3 (diarizer-local labels)
+  - { label: S1, name: "?" }
+  - { label: S2, name: "?" }
+  - { label: S3, name: "?" }
+
+notes: "first fingerprint-persistence run (tag first-run-ian); 2-min enroll vs 2-min future windows"

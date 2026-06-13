@@ -30,5 +30,12 @@ eval_data/
 eval_harness/experiments/*/audio.*
 eval_harness/experiments/*/results/
 
+# fingerprint-persistence runs: the original audio + generated segments/outputs are NOT
+# committed (metadata.yaml + README + drop-markers ARE)
+eval_harness/fingerprint_runs/*/source/*
+!eval_harness/fingerprint_runs/*/source/*.md
+eval_harness/fingerprint_runs/*/segments/
+eval_harness/fingerprint_runs/*/results/
+
 # OS
 .DS_Store
