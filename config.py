@@ -10,6 +10,17 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+# Load a local `.env` (next to this file) before reading any os.environ below, so
+# secrets like the Google OAuth client live in a gitignored file, not the shell
+# history. Real environment variables still win over `.env`. No-op if python-dotenv
+# isn't installed or the file is absent.
+try:
+    from dotenv import load_dotenv
+
+    load_dotenv(Path(__file__).resolve().parent / ".env")
+except ModuleNotFoundError:
+    pass
+
 SERVICE_NAME = "fpm"
 SERVICE_VERSION = "0.0.1"
 
@@ -60,7 +71,7 @@ RATE_LIMIT_WINDOW_SEC = float(os.environ.get("FPM_RATE_LIMIT_WINDOW_SEC", "60"))
 # routes 503 and the dev-login path (below) is the only way in — fine for local demo.
 GOOGLE_CLIENT_ID = os.environ.get("FPM_GOOGLE_CLIENT_ID", "")
 GOOGLE_CLIENT_SECRET = os.environ.get("FPM_GOOGLE_CLIENT_SECRET", "")
-OAUTH_REDIRECT_URI = os.environ.get("FPM_OAUTH_REDIRECT_URI", "http://localhost:8000/auth/callback")
+OAUTH_REDIRECT_URI = os.environ.get("FPM_OAUTH_REDIRECT_URI", "http://localhost:3002/auth/callback")
 # HMAC key for signing the dashboard session cookie. MUST be set in prod (sealed);
 # a random per-process default keeps dev safe but logs everyone out on restart.
 SESSION_SECRET = os.environ.get("FPM_SESSION_SECRET", "")

@@ -1,0 +1,122 @@
+@import "tailwindcss";
+
+/* ─────────────────────────────────────────────────────────────
+   FPM consent plane — Enclave Emerald (dark, sleek, minimal).
+   Near-black faintly-green canvas; emerald is the trust/operational
+   accent (sealed enclave). shadcn-style token system on Tailwind v4.
+   ───────────────────────────────────────────────────────────── */
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-attested: var(--attested);
+
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+}
+
+:root {
+  --background: #0a0f0d; /* near-black, faintly green */
+  --foreground: #ecfdf5; /* mint-white */
+  --card: #111816;
+  --card-foreground: #ecfdf5;
+  --popover: #111816;
+  --popover-foreground: #ecfdf5;
+  --primary: #34d399; /* emerald */
+  --primary-foreground: #04120c;
+  --secondary: #1a2420;
+  --secondary-foreground: #ecfdf5;
+  --muted: #1a2420;
+  --muted-foreground: #8ba39b;
+  --accent: #1a2420;
+  --accent-foreground: #ecfdf5;
+  --destructive: #f87171;
+  --destructive-foreground: #1a0606;
+  --border: #1f2a26; /* hairlines */
+  --input: #243029;
+  --ring: #34d399;
+  --attested: #22c55e;
+  --radius: 0.85rem;
+}
+
+* {
+  border-color: var(--border);
+}
+
+html {
+  color-scheme: dark;
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  /* atmosphere: a faint emerald glow up top + fine grain, not a flat fill */
+  background-image:
+    radial-gradient(60rem 40rem at 50% -10%, rgba(52, 211, 153, 0.08), transparent 60%),
+    radial-gradient(40rem 30rem at 90% 0%, rgba(52, 211, 153, 0.04), transparent 55%);
+  background-attachment: fixed;
+}
+
+::selection {
+  background: rgba(52, 211, 153, 0.25);
+  color: var(--foreground);
+}
+
+/* thin, dark scrollbars to match the enclave feel */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--input) transparent;
+}
+
+@keyframes fpm-rise {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-rise {
+  animation: fpm-rise 0.5s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+@keyframes fpm-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+
+.animate-pulse-dot {
+  animation: fpm-pulse 1.4s ease-in-out infinite;
+}

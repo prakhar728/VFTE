@@ -13,3 +13,6 @@ cryptography>=42.0
 
 # --- added in later milestones ---
 #   scipy>=1.11            # clustering / signal (our ONNX diarizer, E.3)
+
+# .env loading (config.py) — local secrets like the Google OAuth client
+python-dotenv>=1.0
