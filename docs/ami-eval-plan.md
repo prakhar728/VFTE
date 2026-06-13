@@ -107,10 +107,21 @@ The *real* system: chunks linked into a consistent whole-meeting labeling.
 ---
 
 ## 2. What exists vs what I build
-- **Exists:** DiariZen batch engine, diart engine, Whisper ASR, merge, peak-RSS pattern.
-- **Build:** AMI fetch/prep + RTTM refs, `pyannote.metrics` DER scorer, `meeteval` cpWER scorer,
-  chunked-DiariZen runner (per-chunk for Exp 1; +linker for Exp 2), the sweep orchestrator
-  (subprocess-per-run, resumable, writes `results.jsonl`), the plotter.
+- **Already built + committed (reuse, don't rebuild):**
+  - `evaluation/` package — **`der.py` = real `pyannote.metrics` DER scorer**, `der_eval.py`, `rttm.py`,
+    `harness.py`, `id_eval.py`. The DER metric + RTTM handling are done.
+  - **A validated diart-vs-DiariZen AMI bake-off** (`docs/bakeoff-offline.md`, `docs/der-eval.md`):
+    DiariZen 22.8% strict / **~14% lenient**, diart 32.9% strict, on IS1009a + ES2004a (SDM). The
+    **lenient ~14% already matches DiariZen's published ~13–14%** → Phase 0/2 protocol + reproduction
+    are **largely de-risked** on 2 meetings. AMI audio is in `eval_data/` (gitignored).
+  - DiariZen batch engine, diart engine, Whisper ASR, merge, peak-RSS pattern.
+- **Genuinely new to build:** `meeteval` **cpWER** scorer (der.py is DER-only); **more AMI meetings**
+  (extend beyond IS1009a/ES2004a to the full test split); the **chunked-streaming DiariZen runner**
+  (per-chunk for Exp 1; +FPM linker for Exp 2); the **staged-sweep orchestrator** (subprocess-per-run,
+  resumable, `results.jsonl`); the **plotter**.
+
+> **Net effect:** Phases 1–2 are mostly done. The real work is the **chunked runner + the staged
+> sweep + cpWER + more meetings + plots** — and the bake-off gives us a known-good anchor to extend from.
 
 ## 3. Reusability / robustness for an overnight run
 - **Resumable:** each (system, config, meeting) run is independent; skip already-done rows → safe to
