@@ -70,7 +70,8 @@ def plot_latency(rows: list[dict], out_png: Path) -> None:
     ax1.plot(x, [r["diarize_sec"] for r in rows], "s-", label="diarize (diart)")
     ax1.plot(x, [r["total_sec"] for r in rows], "^-", label="total", linewidth=2)
     ax1.set_ylabel("processing time (s)")
-    ax1.set_title("Latency vs clip duration (1 / 3 / 6-min pieces)")
+    pieces = " / ".join(f"{r['duration_min']:g}" for r in rows)
+    ax1.set_title(f"Latency vs clip duration ({pieces}-min pieces)")
     ax1.grid(True, alpha=0.3); ax1.legend()
 
     ax2.plot(x, [r["rtf"] for r in rows], "D-", color="#b8423a", label="RTF (total / audio len)")
