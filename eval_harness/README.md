@@ -23,6 +23,15 @@ FPM's diart + identify internals. Each experiment is a self-describing folder.
 `large-v3-turbo` is already cached locally (same repo Recato resolves it to). The vocab compare
 (`asr.vocab_compare: true`) runs Whisper twice (on + off) — slower on CPU but gives the WER delta.
 
+## Compare engines + record UI
+- **diart vs DiariZen, side-by-side:** `… -m eval_harness.compare experiments/<name>` runs the same
+  audio through both venvs (subprocess — they can't share one) and writes `results/compare.json` +
+  a table of WER / speaker-accuracy / RTF / peak-RAM / speakers, with the DiariZen-over-diart deltas.
+  Needs both `/tmp/diart-venv` and `/tmp/diarizen-venv` (see `requirements-diarizen.txt`).
+- **One-button record:** `… -m eval_harness.server` → open `http://localhost:8090/record/<name>`,
+  hit Record → Save (writes `experiments/<name>/audio.wav`) → Run (diart) → metrics panel. No live
+  transcription — it records then batches.
+
 ## Window-comparison example
 `experiments/diart-2min-window/` reuses the eval-conversation audio + gold and only changes
 `diarizer.window_sec: 120` — drop the recording once at `experiments/eval-conversation/audio.wav`,

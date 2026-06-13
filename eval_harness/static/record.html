@@ -1,0 +1,159 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>eval-harness · record → save → run</title>
+<style>
+  :root { --bg:#1a1714; --panel:#262019; --ink:#f3ede4; --muted:#a89a86; --accent:#e07a3f;
+          --ok:#6fae6f; --line:#3a3128; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--ink);
+         font:15px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }
+  .wrap { max-width:760px; margin:0 auto; padding:32px 20px 64px; }
+  h1 { font-size:20px; margin:0 0 4px; font-weight:600; }
+  .sub { color:var(--muted); margin:0 0 24px; font-size:13px; }
+  .panel { background:var(--panel); border:1px solid var(--line); border-radius:12px;
+           padding:20px; margin-bottom:18px; }
+  label { display:block; font-size:12px; text-transform:uppercase; letter-spacing:.04em;
+          color:var(--muted); margin-bottom:8px; }
+  select { width:100%; padding:10px 12px; background:var(--bg); color:var(--ink);
+           border:1px solid var(--line); border-radius:8px; font-size:14px; }
+  .row { display:flex; gap:10px; flex-wrap:wrap; align-items:center; }
+  button { border:0; border-radius:8px; padding:11px 18px; font-size:14px; font-weight:600;
+           cursor:pointer; color:#fff; background:var(--accent); }
+  button.ghost { background:transparent; border:1px solid var(--line); color:var(--ink); }
+  button:disabled { opacity:.4; cursor:not-allowed; }
+  .rec-on { background:#b8423a; }
+  .dot { display:inline-block; width:9px; height:9px; border-radius:50%; background:#b8423a;
+         margin-right:7px; vertical-align:middle; animation:pulse 1s infinite; }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.25} }
+  .status { font-size:13px; color:var(--muted); margin-top:12px; min-height:18px; }
+  .status.ok { color:var(--ok); } .status.err { color:#e0795f; }
+  audio { width:100%; margin-top:14px; }
+  pre { background:var(--bg); border:1px solid var(--line); border-radius:8px; padding:14px;
+        overflow:auto; font-size:12.5px; color:#d9cfc0; max-height:420px; }
+  .timer { font-variant-numeric:tabular-nums; font-size:13px; color:var(--muted); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>eval-harness · record → save → run</h1>
+  <p class="sub">Record in the browser → it saves to <code>experiments/&lt;exp&gt;/audio.wav</code> →
+     Run diarizes + transcribes (diart) and shows the metrics. No live transcription (record→batch).</p>
+
+  <div class="panel">
+    <label for="exp">Experiment</label>
+    <select id="exp"></select>
+  </div>
+
+  <div class="panel">
+    <label>1 · Record</label>
+    <div class="row">
+      <button id="rec">● Record</button>
+      <span class="timer" id="timer">00:00</span>
+    </div>
+    <audio id="play" controls hidden></audio>
+    <div class="row" style="margin-top:14px">
+      <button id="save" class="ghost" disabled>2 · Save to experiment</button>
+    </div>
+    <div class="status" id="saveStatus"></div>
+  </div>
+
+  <div class="panel">
+    <label>3 · Run</label>
+    <div class="row">
+      <button id="run">▶ Run experiment</button>
+    </div>
+    <div class="status" id="runStatus"></div>
+    <pre id="result" hidden></pre>
+  </div>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+let mediaRecorder, chunks = [], blob = null, tStart = 0, tick = null;
+
+async function loadExperiments() {
+  const r = await fetch("/api/experiments");
+  const { experiments } = await r.json();
+  const sel = $("exp");
+  sel.innerHTML = "";
+  if (!experiments.length) {
+    sel.innerHTML = '<option>(no experiment folders found)</option>';
+    return;
+  }
+  for (const name of experiments) {
+    const o = document.createElement("option"); o.value = o.textContent = name; sel.appendChild(o);
+  }
+  // deep-link: /record/<exp> preselects
+  const m = location.pathname.match(/\/record\/([^/]+)/);
+  if (m && experiments.includes(decodeURIComponent(m[1]))) sel.value = decodeURIComponent(m[1]);
+}
+
+function fmt(s) { const m = Math.floor(s/60), x = s%60; return `${String(m).padStart(2,"0")}:${String(x).padStart(2,"0")}`; }
+
+$("rec").onclick = async () => {
+  if (mediaRecorder && mediaRecorder.state === "recording") {
+    mediaRecorder.stop();
+    return;
+  }
+  let stream;
+  try { stream = await navigator.mediaDevices.getUserMedia({ audio: true }); }
+  catch (e) { setStatus("saveStatus", "mic permission denied: " + e.message, "err"); return; }
+  chunks = []; blob = null;
+  mediaRecorder = new MediaRecorder(stream);
+  mediaRecorder.ondataavailable = e => { if (e.data.size) chunks.push(e.data); };
+  mediaRecorder.onstop = () => {
+    stream.getTracks().forEach(t => t.stop());
+    blob = new Blob(chunks, { type: mediaRecorder.mimeType || "audio/webm" });
+    $("play").src = URL.createObjectURL(blob); $("play").hidden = false;
+    $("save").disabled = false;
+    $("rec").textContent = "● Record"; $("rec").classList.remove("rec-on");
+    clearInterval(tick);
+  };
+  mediaRecorder.start();
+  tStart = 0; $("timer").textContent = "00:00";
+  clearInterval(tick); tick = setInterval(() => $("timer").textContent = fmt(++tStart), 1000);
+  $("rec").textContent = "■ Stop"; $("rec").classList.add("rec-on");
+  $("save").disabled = true;
+};
+
+function setStatus(id, msg, cls) {
+  const el = $(id); el.textContent = msg; el.className = "status" + (cls ? " " + cls : "");
+}
+
+$("save").onclick = async () => {
+  if (!blob) return;
+  const exp = $("exp").value;
+  setStatus("saveStatus", "saving…");
+  const fd = new FormData();
+  fd.append("file", blob, "recording.webm");
+  try {
+    const r = await fetch(`/record/${encodeURIComponent(exp)}/upload`, { method:"POST", body: fd });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.detail || r.statusText);
+    setStatus("saveStatus", `✓ saved ${j.saved} (${j.duration_sec}s)`, "ok");
+  } catch (e) { setStatus("saveStatus", "save failed: " + e.message, "err"); }
+};
+
+$("run").onclick = async () => {
+  const exp = $("exp").value;
+  setStatus("runStatus", "running diart + whisper… (this can take a while on CPU)");
+  $("result").hidden = true;
+  $("run").disabled = true;
+  try {
+    const r = await fetch(`/record/${encodeURIComponent(exp)}/run`, { method:"POST" });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.detail || r.statusText);
+    const wer = (j.wer*100).toFixed(1), spk = (j.speaker_accuracy*100).toFixed(1);
+    setStatus("runStatus", `✓ WER ${wer}% · speakers ${spk}% · RTF ${j.rtf} · ${j.speakers_detected} speakers`, "ok");
+    $("result").textContent = JSON.stringify(j, null, 2); $("result").hidden = false;
+  } catch (e) { setStatus("runStatus", "run failed: " + e.message, "err"); }
+  finally { $("run").disabled = false; }
+};
+
+loadExperiments();
+</script>
+</body>
+</html>

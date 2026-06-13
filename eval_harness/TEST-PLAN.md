@@ -8,13 +8,26 @@ The harness needs the eval venv (faster-whisper + diart). Diarizen-engine tests 
 diarizen venv.
 ```
 cd FPM
-# diart + whisper + scoring (most tests)
+# diart + whisper + scoring + compare + server UI (most tests; 30 green)
 HF_TOKEN=$(cat ~/.cache/huggingface/token) PYTHONPATH=$(pwd) \
   /tmp/diart-venv/bin/python -m pytest -q -p no:warnings eval_harness/tests/
 
 # DiariZen engine tests (C9+) — separate venv
 HF_TOKEN=$(cat ~/.cache/huggingface/token) PYTHONPATH=$(pwd) \
   /tmp/diarizen-venv/bin/python -m pytest -q -p no:warnings eval_harness/tests/test_diarizen.py
+```
+
+## Running an experiment / compare / UI
+```
+cd FPM
+# one engine (diart default; or --engine diarizen in the diarizen venv):
+HF_TOKEN=… PYTHONPATH=$(pwd) /tmp/diart-venv/bin/python -m eval_harness.run experiments/<name>
+
+# diart vs DiariZen side-by-side (bridges both venvs by subprocess):
+HF_TOKEN=… PYTHONPATH=$(pwd) /tmp/diart-venv/bin/python -m eval_harness.compare experiments/<name>
+
+# record→save→run UI → http://localhost:8090/record/<name>
+HF_TOKEN=… PYTHONPATH=$(pwd) /tmp/diart-venv/bin/python -m eval_harness.server
 ```
 Tests gated on a missing model/venv/HF_TOKEN **skip** (not fail), so a partial setup still passes.
 
@@ -31,8 +44,8 @@ Tests gated on a missing model/venv/HF_TOKEN **skip** (not fail), so a partial s
 | `f0ccccb` C8 | window-comparison example + README | config load check |
 | **`f0ccccb` = offline-harness known-good HEAD (22 tests green)** | | |
 | `c0ccd22` C9 | real DiariZen engine + pinned venv | `test_diarizen.py` (diarizen-venv, real run ✓) |
-| C10 *(next)* | one-command compare (diart vs DiariZen) | `test_compare.py` (synthetic) |
-| C11 | record→save→run web UI | `test_server.py` (TestClient) |
+| `bb01ece` C10 | one-command compare + run.py --engine/peak-RSS | `test_compare.py` (3, synthetic) |
+| C11 *(next)* | record→save→run web UI | `test_server.py` (5, TestClient) |
 
 ## Rollback
 - Inspect: `git log --oneline dev..HEAD`
