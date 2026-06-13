@@ -23,11 +23,12 @@ def test_window_is_configurable():
     assert d._duration == 10.0 and d._step == 0.5      # window threaded into the diart config
 
 
-def test_diarizen_is_a_stub():
+def test_diarizen_builds():
+    # DiariZen is now real (its actual model only loads in start(), inside the diarizen venv).
+    # Here we just confirm the factory wires the engine and it satisfies the interface.
     d = make_diarizer("diarizen", window_sec=120)
     assert isinstance(d, StreamingDiarizer)
-    with pytest.raises(NotImplementedError):
-        d.start("ws")
+    assert type(d).__name__ == "DiariZenDiarizer"
 
 
 def test_unknown_engine_raises():
