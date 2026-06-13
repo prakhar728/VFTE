@@ -29,9 +29,9 @@ Tests gated on a missing model/venv/HF_TOKEN **skip** (not fail), so a partial s
 | `c2539c3` C5 | scoring (WER + speaker) + metrics | `test_scoring.py` (6) |
 | `9604c90` C6 | CLI runner + end-to-end | `test_run.py` (1, e2e) |
 | `f0ccccb` C8 | window-comparison example + README | config load check |
-| **`f0ccccb` = current known-good HEAD (offline harness, 22 tests green)** | | |
-| C9 *(next)* | DiariZen engine + pinned venv | `test_diarizen.py` (diarizen-venv) |
-| C10 | one-command compare (diart vs DiariZen) | `test_compare.py` (synthetic) |
+| **`f0ccccb` = offline-harness known-good HEAD (22 tests green)** | | |
+| `c0ccd22` C9 | real DiariZen engine + pinned venv | `test_diarizen.py` (diarizen-venv, real run ✓) |
+| C10 *(next)* | one-command compare (diart vs DiariZen) | `test_compare.py` (synthetic) |
 | C11 | record→save→run web UI | `test_server.py` (TestClient) |
 
 ## Rollback

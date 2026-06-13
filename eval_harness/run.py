@@ -1,13 +1,18 @@
 """CLI runner — run one experiment folder offline.
 
     python -m eval_harness.run experiments/<name>
+    python -m eval_harness.run experiments/<name> --engine diarizen
 
 Reads config + audio + gold, runs Whisper + diarize → merge, scores WER (vocab-on vs -off) +
-speaker attribution, writes results/result.json + transcript(s).txt, and prints a summary.
+speaker attribution, writes result.json + transcript(s).txt, and prints a summary. `--engine`
+overrides the config's diarizer (so the same folder runs through diart and DiariZen) and isolates
+the output under `results/<engine>/` — that split is what `compare` reads back.
 """
 from __future__ import annotations
 
+import argparse
 import json
+import resource
 import sys
 from pathlib import Path
 
@@ -21,8 +26,16 @@ def render_transcript(turns) -> str:
     return "\n".join(f"[{t.speaker}] {t.text}" for t in turns)
 
 
-def run_experiment(exp_dir: str | Path) -> dict:
+def _peak_rss_mb() -> float:
+    """Process peak resident set, MB. ru_maxrss is bytes on macOS, kilobytes on Linux."""
+    rss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+    return round(rss / (1024 ** 2 if sys.platform == "darwin" else 1024), 1)
+
+
+def run_experiment(exp_dir: str | Path, engine: str | None = None) -> dict:
     cfg = ExperimentConfig.load(exp_dir)
+    if engine:
+        cfg.diarizer.engine = engine        # CLI override → run the SAME folder through any engine
     errs = cfg.validate()
     if errs:
         raise SystemExit("config errors:\n  - " + "\n  - ".join(errs))
@@ -49,6 +62,7 @@ def run_experiment(exp_dir: str | Path) -> dict:
             "step_sec": cfg.diarizer.step_sec, "mode": cfg.mode, "notes": cfg.notes,
         },
         **m.as_dict(),
+        "peak_rss_mb": _peak_rss_mb(),
         "wer": round(wer_on, 4),
         "wer_vocab_off": round(wer_off, 4) if wer_off is not None else None,
         "wer_delta_vocab": round(wer_off - wer_on, 4) if wer_off is not None else None,
@@ -57,11 +71,13 @@ def run_experiment(exp_dir: str | Path) -> dict:
         "speakers_detected": len({s.local_speaker for s in res.speaker_segments}),
     }
 
-    cfg.results_dir.mkdir(parents=True, exist_ok=True)
-    (cfg.results_dir / "result.json").write_text(json.dumps(out, indent=2))
-    (cfg.results_dir / "transcript.txt").write_text(render_transcript(res.turns) + "\n")
+    # default → results/ ; with an engine override → results/<engine>/ (so compare can keep both).
+    out_dir = cfg.results_dir / engine if engine else cfg.results_dir
+    out_dir.mkdir(parents=True, exist_ok=True)
+    (out_dir / "result.json").write_text(json.dumps(out, indent=2))
+    (out_dir / "transcript.txt").write_text(render_transcript(res.turns) + "\n")
     if res.turns_vocab_off is not None:
-        (cfg.results_dir / "transcript.vocab-off.txt").write_text(
+        (out_dir / "transcript.vocab-off.txt").write_text(
             render_transcript(res.turns_vocab_off) + "\n")
     return out
 
@@ -79,13 +95,17 @@ def _print_summary(out: dict) -> None:
     print(line)
     print(f"  speaker attribution accuracy: {out['speaker_accuracy']*100:.1f}%  "
           f"(map {out['speaker_mapping']})")
-    print(f"  → results/ written\n")
+    print(f"  peak RAM: {out.get('peak_rss_mb', '?')} MB")
+    print(f"  → results written\n")
 
 
 def main() -> None:
-    if len(sys.argv) != 2:
-        raise SystemExit("usage: python -m eval_harness.run experiments/<name>")
-    _print_summary(run_experiment(sys.argv[1]))
+    ap = argparse.ArgumentParser(prog="eval_harness.run")
+    ap.add_argument("exp_dir", help="experiment folder, e.g. experiments/eval-conversation")
+    ap.add_argument("--engine", choices=["diart", "diarizen"], default=None,
+                    help="override config diarizer; writes to results/<engine>/")
+    args = ap.parse_args()
+    _print_summary(run_experiment(args.exp_dir, engine=args.engine))
 
 
 if __name__ == "__main__":
