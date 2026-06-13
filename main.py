@@ -21,7 +21,8 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 import config
-from auth import Caller, TokenAuth, _extract_token, require_scope
+import consent_api
+from auth import Caller, GoogleOAuth, SessionManager, TokenAuth, _extract_token, require_scope
 from fpm.audio import AudioDecodeError, decode_to_mono
 from fpm.embed.onnx_embedder import OnnxSpeakerEmbedder
 from fpm.enroll import enroll
@@ -72,6 +73,13 @@ async def lifespan(app: FastAPI):
     # Respect pre-set state (tests inject a tmp store / embedder / auth / diarizer).
     if not getattr(app.state, "auth", None):
         app.state.auth = TokenAuth.from_env()
+    # consent-plane end-user auth (WS2): dashboard session signer + Google OAuth.
+    if not getattr(app.state, "sessions", None):
+        app.state.sessions = SessionManager(config.SESSION_SECRET, config.SESSION_TTL_SEC)
+    if not getattr(app.state, "oauth", None):
+        app.state.oauth = GoogleOAuth(
+            config.GOOGLE_CLIENT_ID, config.GOOGLE_CLIENT_SECRET, config.OAUTH_REDIRECT_URI
+        )
     if not getattr(app.state, "diarizer_factory", None):
         app.state.diarizer_factory = _default_diarizer_factory
     if not getattr(app.state, "rate_limiter", None):
@@ -92,6 +100,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title=config.SERVICE_NAME, version=config.SERVICE_VERSION, lifespan=lifespan)
+app.include_router(consent_api.router)  # consent-plane web surface (sign-in + dashboard)
 
 
 @app.exception_handler(HTTPException)
@@ -135,7 +144,7 @@ async def enroll_endpoint(
     duration = len(audio) / config.TARGET_SAMPLE_RATE
     result = enroll(
         request.app.state.store, embedder, workspace, identity, audio,
-        config.TARGET_SAMPLE_RATE, duration,
+        config.TARGET_SAMPLE_RATE, duration, consumer=caller.name,
     )
     return {"voiceprint_id": result.voiceprint_id, "status": result.status, "reason": result.reason}
 
@@ -187,12 +196,20 @@ async def identify_endpoint(
     if emb is None:
         return {"voiceprint_id": None, "name": None, "decision": "UNKNOWN",
                 "confidence": 0.0, "score": -1.0, "reason": "audio too short to embed"}
-    res = classify(emb, request.app.state.store.centroids(workspace))
-    name = None
+    store = request.app.state.store
+    res = classify(emb, store.centroids(workspace))
+    name, decision = None, res.decision
     if res.voiceprint_id:
-        vp = request.app.state.store.get(workspace, res.voiceprint_id)
-        name = (vp.name or None) if vp else None
-    return {"voiceprint_id": res.voiceprint_id, "name": name, "decision": res.decision,
+        if store.identify_allowed(workspace, res.voiceprint_id):
+            vp = store.get(workspace, res.voiceprint_id)
+            name = (vp.name or None) if vp else None
+            store.log_usage(workspace, res.voiceprint_id, "identify", caller.name, "identify clip")
+        else:
+            # WS5 "stay anonymous": cluster preserved, name withheld, surfaced as anonymous.
+            decision = "ANON"
+            store.log_usage(workspace, res.voiceprint_id, "identify", caller.name,
+                            "suppressed (anonymous)")
+    return {"voiceprint_id": res.voiceprint_id, "name": name, "decision": decision,
             "confidence": round(res.confidence, 4), "score": round(res.score, 4)}
 
 
@@ -225,11 +242,14 @@ async def diarize_endpoint(
     if tag == "gmeet":  # roster-labeled → learn only, no diarization
         if not identity:
             raise HTTPException(400, "gmeet tag requires an identity (roster-labeled audio)")
-        result = enroll(request.app.state.store, embedder, workspace, identity, audio, sr, len(audio) / sr)
-        return {"routed": "enroll", "voiceprint_id": result.voiceprint_id, "status": result.status}
+        result = enroll(request.app.state.store, embedder, workspace, identity, audio, sr,
+                        len(audio) / sr, consumer=caller.name)
+        return {"routed": "enroll", "voiceprint_id": result.voiceprint_id,
+                "status": result.status, "reason": result.reason}
 
     diarizer = request.app.state.diarizer_factory()
-    ident = SessionIdentifier(request.app.state.store, embedder, diarizer, workspace, sample_rate=sr)
+    ident = SessionIdentifier(request.app.state.store, embedder, diarizer, workspace,
+                              sample_rate=sr, consumer=caller.name)
     step = int(_FEED_SEC * sr)
 
     def stream():

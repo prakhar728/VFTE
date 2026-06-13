@@ -1,0 +1,192 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>FPM · your voiceprint</title>
+<style>
+  :root { --bg:#1a1714; --panel:#262019; --panel2:#2f2820; --ink:#f3ede4; --muted:#a89a86;
+          --accent:#e07a3f; --ok:#6fae6f; --warn:#d8a657; --danger:#d4623f; --line:#3a3128; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--ink);
+         font:15px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }
+  .wrap { max-width:760px; margin:0 auto; padding:36px 20px 80px; }
+  .brand { display:flex; align-items:baseline; gap:10px; }
+  h1 { font-size:21px; margin:0; font-weight:700; letter-spacing:-.01em; }
+  .tag { color:var(--accent); font-size:12px; font-weight:600; text-transform:uppercase; letter-spacing:.06em; }
+  .lead { color:var(--muted); margin:8px 0 28px; font-size:13.5px; max-width:60ch; }
+  .panel { background:var(--panel); border:1px solid var(--line); border-radius:14px;
+           padding:22px; margin-bottom:18px; }
+  .row { display:flex; gap:12px; align-items:center; flex-wrap:wrap; }
+  .spread { justify-content:space-between; }
+  button { border:0; border-radius:9px; padding:11px 18px; font-size:13.5px; font-weight:600;
+           cursor:pointer; color:#fff; background:var(--accent); transition:opacity .15s; }
+  button.ghost { background:transparent; border:1px solid var(--line); color:var(--ink); }
+  button.danger { background:transparent; border:1px solid var(--danger); color:var(--danger); }
+  button:hover { opacity:.88; } button:disabled { opacity:.4; cursor:not-allowed; }
+  .vp { background:var(--panel); border:1px solid var(--line); border-radius:14px;
+        padding:20px 22px; margin-bottom:16px; }
+  .vp h3 { margin:0 0 2px; font-size:16px; }
+  .ws { font-size:11.5px; color:var(--muted); font-family:ui-monospace,Menlo,monospace; }
+  .meta { color:var(--muted); font-size:12.5px; margin:4px 0 16px; }
+  .pill { display:inline-block; font-size:11px; padding:2px 9px; border-radius:999px;
+          border:1px solid var(--line); color:var(--muted); margin-left:6px; }
+  .pill.anon { color:var(--warn); border-color:var(--warn); }
+  .ctrl { display:flex; align-items:center; justify-content:space-between; gap:14px;
+          padding:12px 0; border-top:1px solid var(--line); }
+  .ctrl .label { font-size:13.5px; } .ctrl .desc { font-size:12px; color:var(--muted); }
+  .switch { position:relative; width:44px; height:24px; flex:0 0 auto; }
+  .switch input { opacity:0; width:0; height:0; }
+  .slider { position:absolute; inset:0; background:#4a3f33; border-radius:999px; transition:.2s; cursor:pointer; }
+  .slider:before { content:""; position:absolute; height:18px; width:18px; left:3px; top:3px;
+                   background:#fff; border-radius:50%; transition:.2s; }
+  input:checked + .slider { background:var(--accent); }
+  input:checked + .slider:before { transform:translateX(20px); }
+  .usage { margin-top:14px; border-top:1px solid var(--line); padding-top:12px; }
+  .usage h4 { margin:0 0 8px; font-size:11px; text-transform:uppercase; letter-spacing:.05em; color:var(--muted); }
+  .ev { display:flex; gap:10px; font-size:12.5px; padding:3px 0; color:#d9cfc0; }
+  .ev .k { color:var(--accent); font-weight:600; min-width:74px; }
+  .ev .when { margin-left:auto; color:var(--muted); font-variant-numeric:tabular-nums; }
+  .empty { color:var(--muted); font-size:13px; }
+  .status { font-size:12.5px; color:var(--muted); min-height:16px; margin-top:6px; }
+  .status.err { color:var(--danger); } .status.ok { color:var(--ok); }
+  a.btnlink { text-decoration:none; }
+  .forget { margin-top:16px; border-top:1px solid var(--line); padding-top:14px; }
+  input.email { padding:10px 12px; background:var(--bg); color:var(--ink); border:1px solid var(--line);
+                border-radius:8px; font-size:14px; min-width:220px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="brand"><h1>Your voiceprint</h1><span class="tag">your voice · your keys</span></div>
+  <p class="lead">Every meeting assistant quietly keeps a fingerprint of your voice to recognize
+     you across calls. Here is yours — what's stored, how it's been used, and the controls to
+     stay anonymous or delete it for good.</p>
+
+  <div id="app"></div>
+</div>
+
+<script>
+const $ = sel => document.querySelector(sel);
+const api = (p, opts) => fetch(p, { credentials:"same-origin", ...opts });
+const esc = s => (s ?? "").toString().replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const fmt = ts => ts ? new Date(ts).toLocaleString() : "—";
+
+async function boot() {
+  const me = await (await api("/v1/me")).json();
+  if (!me.signed_in) return renderSignedOut(me);
+  return renderDashboard(me.email);
+}
+
+function renderSignedOut(me) {
+  const google = me.google_enabled
+    ? `<a class="btnlink" href="/auth/login"><button>Sign in with Google</button></a>`
+    : `<span class="empty">Google sign-in not configured.</span>`;
+  const dev = me.dev_login
+    ? `<div class="row" style="margin-top:14px">
+         <input class="email" id="devEmail" placeholder="you@company.com" />
+         <button class="ghost" id="devBtn">Dev sign-in</button>
+       </div>` : "";
+  $("#app").innerHTML = `<div class="panel"><div class="row">${google}</div>${dev}
+    <div class="status" id="st"></div></div>`;
+  if (me.dev_login) $("#devBtn").onclick = () => {
+    const e = $("#devEmail").value.trim();
+    if (e) location.href = "/auth/dev-login?email=" + encodeURIComponent(e);
+  };
+}
+
+async function renderDashboard(email) {
+  $("#app").innerHTML = `<div class="panel row spread">
+      <span>Signed in as <b>${esc(email)}</b></span>
+      <button class="ghost" id="logout">Sign out</button>
+    </div><div id="vps"><div class="empty">Loading…</div></div>`;
+  $("#logout").onclick = async () => { await api("/auth/logout", {method:"POST"}); boot(); };
+  await loadVoiceprints();
+}
+
+async function loadVoiceprints() {
+  const data = await (await api("/v1/me/voiceprints")).json();
+  if (!data.voiceprints.length) {
+    $("#vps").innerHTML = `<div class="panel empty">No voiceprint is stored for your email yet.
+      Once you're recorded in a meeting, it'll appear here under your control.</div>`;
+    return;
+  }
+  $("#vps").innerHTML = data.voiceprints.map(renderVp).join("");
+  data.voiceprints.forEach(wire);
+}
+
+function renderVp(vp) {
+  const anon = !vp.identify_allowed;
+  const usage = vp.usage.length
+    ? vp.usage.slice(0, 8).map(u => `<div class="ev"><span class="k">${esc(u.event)}</span>
+        <span>${esc(u.consumer)}${u.purpose ? " · " + esc(u.purpose) : ""}</span>
+        <span class="when">${fmt(u.ts)}</span></div>`).join("")
+    : `<div class="empty">No recorded activity.</div>`;
+  const id = vp.workspace_id + "|" + vp.voiceprint_id;
+  return `<div class="vp" data-id="${esc(id)}">
+    <div class="row spread">
+      <div><h3>${esc(vp.name || "Unnamed voiceprint")}
+        ${anon ? '<span class="pill anon">anonymous</span>' : ''}</h3>
+        <div class="ws">${esc(vp.workspace_id)} · ${esc(vp.voiceprint_id)}</div></div>
+    </div>
+    <div class="meta">enrolled ${vp.enroll_count}× · quality ${vp.quality_score}
+       · first seen ${fmt(vp.created_at)} · last seen ${fmt(vp.last_seen_at)}</div>
+
+    <div class="ctrl">
+      <div><div class="label">Stay anonymous</div>
+        <div class="desc">Still grouped as one speaker, but never named in transcripts.</div></div>
+      <label class="switch"><input type="checkbox" class="t-anon" ${anon ? "checked" : ""}>
+        <span class="slider"></span></label>
+    </div>
+    <div class="ctrl">
+      <div><div class="label">Pause enrollment</div>
+        <div class="desc">Stop strengthening this voiceprint from new audio.</div></div>
+      <label class="switch"><input type="checkbox" class="t-enroll" ${!vp.enroll_allowed ? "checked" : ""}>
+        <span class="slider"></span></label>
+    </div>
+
+    <div class="usage"><h4>How it's been used</h4>${usage}</div>
+
+    <div class="forget row spread">
+      <span class="desc">Permanently delete this voiceprint from FPM.</span>
+      <button class="danger b-forget">Forget me</button>
+    </div>
+    <div class="status" data-st></div>
+  </div>`;
+}
+
+function wire(vp) {
+  const id = vp.workspace_id + "|" + vp.voiceprint_id;
+  const card = document.querySelector(`.vp[data-id="${CSS.escape(id)}"]`);
+  const st = card.querySelector("[data-st]");
+  const base = `/v1/me/voiceprints/${encodeURIComponent(vp.workspace_id)}/${encodeURIComponent(vp.voiceprint_id)}`;
+
+  const setFlag = async (body, msg) => {
+    st.textContent = "saving…"; st.className = "status";
+    const r = await api(base + "/flags", {method:"POST", headers:{"Content-Type":"application/json"},
+      body: JSON.stringify(body)});
+    if (!r.ok) { st.textContent = "failed"; st.className = "status err"; return; }
+    st.textContent = msg; st.className = "status ok";
+    loadVoiceprints();  // re-render (refreshes the anonymous pill + ledger)
+  };
+
+  card.querySelector(".t-anon").onchange = e =>
+    setFlag({identify_allowed: !e.target.checked},
+            e.target.checked ? "You're now anonymous." : "Identification re-enabled.");
+  card.querySelector(".t-enroll").onchange = e =>
+    setFlag({enroll_allowed: !e.target.checked},
+            e.target.checked ? "Enrollment paused." : "Enrollment resumed.");
+
+  card.querySelector(".b-forget").onclick = async () => {
+    if (!confirm("Permanently delete this voiceprint? This can't be undone.")) return;
+    st.textContent = "deleting…"; st.className = "status";
+    const r = await api(base + "/forget", {method:"POST"});
+    if (!r.ok) { st.textContent = "delete failed"; st.className = "status err"; return; }
+    loadVoiceprints();
+  };
+}
+
+boot();
+</script>
+</body>
+</html>

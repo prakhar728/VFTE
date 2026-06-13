@@ -29,6 +29,9 @@ CREATE TABLE IF NOT EXISTS voiceprints(
   voiceprint_id TEXT PRIMARY KEY,
   workspace_id  TEXT NOT NULL,
   name          TEXT NOT NULL DEFAULT '',
+  owner_email   TEXT NOT NULL DEFAULT '',
+  enroll_allowed   INTEGER NOT NULL DEFAULT 1,
+  identify_allowed INTEGER NOT NULL DEFAULT 1,
   centroid      BLOB NOT NULL,
   exemplars     BLOB NOT NULL DEFAULT X'',
   exemplar_count     INTEGER NOT NULL DEFAULT 0,
@@ -42,8 +45,23 @@ CREATE TABLE IF NOT EXISTS vocab(workspace_id TEXT PRIMARY KEY, terms TEXT NOT N
 CREATE TABLE IF NOT EXISTS binding_audit(
   id INTEGER PRIMARY KEY AUTOINCREMENT, workspace_id TEXT, voiceprint_id TEXT,
   old_name TEXT, new_name TEXT, actor TEXT, ts TEXT);
+-- usage ledger (decision G): append-only audit of every touch of a voiceprint —
+-- enroll, identify/match, name-bind, dashboard read, forget. The proof trail, not telemetry.
+CREATE TABLE IF NOT EXISTS usage_ledger(
+  id INTEGER PRIMARY KEY AUTOINCREMENT, workspace_id TEXT, voiceprint_id TEXT,
+  event TEXT, consumer TEXT, purpose TEXT, ts TEXT);
+CREATE INDEX IF NOT EXISTS idx_ledger_vp ON usage_ledger(workspace_id, voiceprint_id);
 CREATE TABLE IF NOT EXISTS store_meta(key TEXT PRIMARY KEY, value TEXT);
 """
+
+# Columns added to `voiceprints` after the original A.5 schema shipped; applied via
+# ALTER on open so an existing real DB upgrades in place (CREATE IF NOT EXISTS won't
+# add columns to a table that already exists).
+_VP_MIGRATIONS = (
+    ("owner_email", "TEXT NOT NULL DEFAULT ''"),
+    ("enroll_allowed", "INTEGER NOT NULL DEFAULT 1"),
+    ("identify_allowed", "INTEGER NOT NULL DEFAULT 1"),
+)
 
 
 def _now() -> str:
@@ -61,6 +79,9 @@ class VoiceprintStore:
         self._conn: sqlite3.Connection | None = None
         self._lock = threading.Lock()
         self._centroids: dict[str, dict[str, np.ndarray]] = {}  # ws → {vid → centroid}
+        # consent flags cached for the hot path (enforcement on every match) so we
+        # don't decrypt a voiceprint just to read two booleans: ws → vid → (enroll, identify)
+        self._flags: dict[str, dict[str, tuple[bool, bool]]] = {}
 
     # ── lifecycle ────────────────────────────────────────────
 
@@ -70,6 +91,7 @@ class VoiceprintStore:
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._conn.execute("PRAGMA synchronous=NORMAL")
         self._conn.executescript(_SCHEMA)
+        self._migrate()
         self._conn.commit()
         try:
             os.chmod(self._db_path, 0o600)
@@ -80,6 +102,15 @@ class VoiceprintStore:
         self._check_meta()
         self._load_centroids()
         return self
+
+    def _migrate(self) -> None:
+        """Add consent-plane columns to a pre-existing `voiceprints` table in place."""
+        have = {row[1] for row in self._conn.execute("PRAGMA table_info(voiceprints)")}
+        for col, decl in _VP_MIGRATIONS:
+            if col not in have:
+                self._conn.execute(f"ALTER TABLE voiceprints ADD COLUMN {col} {decl}")
+        # index on owner_email only after the column is guaranteed to exist (post-ALTER)
+        self._conn.execute("CREATE INDEX IF NOT EXISTS idx_vp_owner ON voiceprints(owner_email)")
 
     def close(self) -> None:
         if self._conn:
@@ -120,10 +151,13 @@ class VoiceprintStore:
 
     def _load_centroids(self) -> None:
         self._centroids.clear()
-        for vid, ws, blob in self._conn.execute(
-            "SELECT voiceprint_id, workspace_id, centroid FROM voiceprints"
+        self._flags.clear()
+        for vid, ws, blob, en, idn in self._conn.execute(
+            "SELECT voiceprint_id, workspace_id, centroid, enroll_allowed, identify_allowed "
+            "FROM voiceprints"
         ):
             self._centroids.setdefault(ws, {})[vid] = self._dec_centroid(blob)
+            self._flags.setdefault(ws, {})[vid] = (bool(en), bool(idn))
 
     # ── writes (workspace-scoped) ────────────────────────────
 
@@ -132,17 +166,21 @@ class VoiceprintStore:
             ts = _now()
             row = (
                 vp.voiceprint_id, vp.workspace_id, vp.name,
+                vp.owner_email, int(vp.enroll_allowed), int(vp.identify_allowed),
                 self._enc(vp.centroid), self._enc_exemplars(vp.exemplars),
                 len(vp.exemplars), vp.enroll_count, vp.total_duration_sec, vp.quality_score,
                 vp.created_at or ts, ts, ts,
             )
             self._conn.execute(
                 """INSERT INTO voiceprints
-                   (voiceprint_id, workspace_id, name, centroid, exemplars, exemplar_count,
+                   (voiceprint_id, workspace_id, name, owner_email, enroll_allowed, identify_allowed,
+                    centroid, exemplars, exemplar_count,
                     enroll_count, total_duration_sec, quality_score, created_at, updated_at, last_seen_at)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                    ON CONFLICT(voiceprint_id) DO UPDATE SET
-                     name=excluded.name, centroid=excluded.centroid, exemplars=excluded.exemplars,
+                     name=excluded.name, owner_email=excluded.owner_email,
+                     enroll_allowed=excluded.enroll_allowed, identify_allowed=excluded.identify_allowed,
+                     centroid=excluded.centroid, exemplars=excluded.exemplars,
                      exemplar_count=excluded.exemplar_count, enroll_count=excluded.enroll_count,
                      total_duration_sec=excluded.total_duration_sec, quality_score=excluded.quality_score,
                      updated_at=excluded.updated_at, last_seen_at=excluded.last_seen_at""",
@@ -151,6 +189,9 @@ class VoiceprintStore:
             self._conn.commit()
             self._centroids.setdefault(vp.workspace_id, {})[vp.voiceprint_id] = (
                 np.asarray(vp.centroid, dtype=np.float32).copy()
+            )
+            self._flags.setdefault(vp.workspace_id, {})[vp.voiceprint_id] = (
+                bool(vp.enroll_allowed), bool(vp.identify_allowed)
             )
 
     def set_name(self, workspace_id: str, voiceprint_id: str, name: str, actor: str) -> bool:
@@ -172,24 +213,142 @@ class VoiceprintStore:
                 " VALUES (?,?,?,?,?,?)",
                 (workspace_id, voiceprint_id, old, name, actor, _now()),
             )
+            self._conn.execute(
+                "INSERT INTO usage_ledger (workspace_id, voiceprint_id, event, consumer, purpose, ts)"
+                " VALUES (?,?,?,?,?,?)",
+                (workspace_id, voiceprint_id, "name_bind", actor, f"named '{name}'", _now()),
+            )
             self._conn.commit()
             return True
 
-    def delete(self, workspace_id: str, voiceprint_id: str) -> bool:
+    def delete(self, workspace_id: str, voiceprint_id: str, actor: str = "dashboard") -> bool:
+        """'Forget me' (demo): scrub the FPM voiceprint. The ledger row survives (append-
+        only proof trail); crypto-shred + re-enroll tombstone are deferred (doc §6)."""
         with self._lock:
             cur = self._conn.execute(
                 "DELETE FROM voiceprints WHERE voiceprint_id=? AND workspace_id=?",
                 (voiceprint_id, workspace_id),
             )
+            deleted = cur.rowcount > 0
+            if deleted:
+                self._conn.execute(
+                    "INSERT INTO usage_ledger (workspace_id, voiceprint_id, event, consumer, purpose, ts)"
+                    " VALUES (?,?,?,?,?,?)",
+                    (workspace_id, voiceprint_id, "forget", actor, "user erasure", _now()),
+                )
             self._conn.commit()
             self._centroids.get(workspace_id, {}).pop(voiceprint_id, None)
+            self._flags.get(workspace_id, {}).pop(voiceprint_id, None)
+            return deleted
+
+    # ── consent flags + ledger (WS3/WS4/WS5) ─────────────────
+
+    def flags(self, workspace_id: str, voiceprint_id: str) -> tuple[bool, bool]:
+        """(enroll_allowed, identify_allowed) from the hot cache; (True, True) if unknown."""
+        return self._flags.get(workspace_id, {}).get(voiceprint_id, (True, True))
+
+    def identify_allowed(self, workspace_id: str, voiceprint_id: str) -> bool:
+        return self.flags(workspace_id, voiceprint_id)[1]
+
+    def set_flags(
+        self,
+        workspace_id: str,
+        voiceprint_id: str,
+        *,
+        enroll_allowed: bool | None = None,
+        identify_allowed: bool | None = None,
+        actor: str = "dashboard",
+    ) -> bool:
+        """Set one or both consent flags on a voiceprint (workspace-scoped). Audited in the ledger."""
+        with self._lock:
+            sets, params, events = [], [], []
+            if enroll_allowed is not None:
+                sets.append("enroll_allowed=?")
+                params.append(int(enroll_allowed))
+                events.append(("enroll_allowed", enroll_allowed))
+            if identify_allowed is not None:
+                sets.append("identify_allowed=?")
+                params.append(int(identify_allowed))
+                events.append(("identify_allowed", identify_allowed))
+            if not sets:
+                return False
+            sets.append("updated_at=?")
+            params.append(_now())
+            cur = self._conn.execute(
+                f"UPDATE voiceprints SET {', '.join(sets)} WHERE voiceprint_id=? AND workspace_id=?",
+                (*params, voiceprint_id, workspace_id),
+            )
+            if cur.rowcount == 0:
+                return False  # not found / wrong workspace
+            for field, val in events:
+                self._conn.execute(
+                    "INSERT INTO usage_ledger (workspace_id, voiceprint_id, event, consumer, purpose, ts)"
+                    " VALUES (?,?,?,?,?,?)",
+                    (workspace_id, voiceprint_id, "control",
+                     actor, f"{field}={'on' if val else 'off'}", _now()),
+                )
+            self._conn.commit()
+            # refresh hot cache
+            en, idn = self.flags(workspace_id, voiceprint_id)
+            if enroll_allowed is not None:
+                en = bool(enroll_allowed)
+            if identify_allowed is not None:
+                idn = bool(identify_allowed)
+            self._flags.setdefault(workspace_id, {})[voiceprint_id] = (en, idn)
+            return True
+
+    def claim_owner(self, workspace_id: str, voiceprint_id: str, owner_email: str) -> bool:
+        """Bind a voiceprint to its authenticated data subject's email (idempotent)."""
+        with self._lock:
+            cur = self._conn.execute(
+                "UPDATE voiceprints SET owner_email=?, updated_at=? "
+                "WHERE voiceprint_id=? AND workspace_id=?",
+                (owner_email, _now(), voiceprint_id, workspace_id),
+            )
+            self._conn.commit()
             return cur.rowcount > 0
+
+    def find_by_owner_email(self, owner_email: str) -> list[tuple[str, str]]:
+        """All (workspace_id, voiceprint_id) for an email — the dashboard's per-workspace list."""
+        return [
+            (row[0], row[1])
+            for row in self._conn.execute(
+                "SELECT workspace_id, voiceprint_id FROM voiceprints WHERE owner_email=? ORDER BY workspace_id",
+                (owner_email,),
+            )
+        ]
+
+    def log_usage(
+        self, workspace_id: str, voiceprint_id: str, event: str,
+        consumer: str, purpose: str = "",
+    ) -> None:
+        """Append a usage-ledger row (decision G). Best-effort; never blocks the caller."""
+        with self._lock:
+            self._conn.execute(
+                "INSERT INTO usage_ledger (workspace_id, voiceprint_id, event, consumer, purpose, ts)"
+                " VALUES (?,?,?,?,?,?)",
+                (workspace_id, voiceprint_id, event, consumer, purpose, _now()),
+            )
+            self._conn.commit()
+
+    def usage_for_voiceprint(self, workspace_id: str, voiceprint_id: str) -> list[dict]:
+        """Usage history for one voiceprint (newest first) — 'how it's been used'."""
+        cols = ("event", "consumer", "purpose", "ts")
+        return [
+            dict(zip(cols, row))
+            for row in self._conn.execute(
+                "SELECT event, consumer, purpose, ts FROM usage_ledger "
+                "WHERE workspace_id=? AND voiceprint_id=? ORDER BY id DESC",
+                (workspace_id, voiceprint_id),
+            )
+        ]
 
     # ── reads (workspace-scoped) ─────────────────────────────
 
     def get(self, workspace_id: str, voiceprint_id: str) -> Voiceprint | None:
         r = self._conn.execute(
-            """SELECT voiceprint_id, workspace_id, name, centroid, exemplars, enroll_count,
+            """SELECT voiceprint_id, workspace_id, name, owner_email, enroll_allowed,
+                      identify_allowed, centroid, exemplars, enroll_count,
                       total_duration_sec, quality_score, created_at, updated_at, last_seen_at
                FROM voiceprints WHERE voiceprint_id=? AND workspace_id=?""",
             (voiceprint_id, workspace_id),
@@ -198,9 +357,10 @@ class VoiceprintStore:
             return None
         vp = Voiceprint(
             voiceprint_id=r[0], workspace_id=r[1], name=r[2],
-            centroid=self._dec_centroid(r[3]), exemplars=self._dec_exemplars(r[4]),
-            enroll_count=r[5], total_duration_sec=r[6], quality_score=r[7],
-            created_at=r[8], updated_at=r[9], last_seen_at=r[10],
+            owner_email=r[3], enroll_allowed=bool(r[4]), identify_allowed=bool(r[5]),
+            centroid=self._dec_centroid(r[6]), exemplars=self._dec_exemplars(r[7]),
+            enroll_count=r[8], total_duration_sec=r[9], quality_score=r[10],
+            created_at=r[11], updated_at=r[12], last_seen_at=r[13],
         )
         vp.recompute_centroid() if vp.exemplars else None  # rebuild sub-centroids
         return vp

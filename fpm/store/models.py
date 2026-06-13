@@ -21,6 +21,16 @@ class Voiceprint:
     workspace_id: str
     name: str = ""  # "" = anonymous (consent: only tagged/enrolled get a name)
 
+    # ── consent plane (WS3/WS5) ──────────────────────────────
+    # owner_email: the authenticated data subject (roster identity). Plaintext beside
+    # the biometric is acceptable *inside* the sealed TEE (decision B). "" = unclaimed.
+    owner_email: str = ""
+    # User-supreme controls (decision E), enforced at FPM (decision D):
+    #   enroll_allowed=False   → enroll.py refuses to create/strengthen this voiceprint
+    #   identify_allowed=False → "stay anonymous": still clusters, never surfaces a name
+    enroll_allowed: bool = True
+    identify_allowed: bool = True
+
     centroid: np.ndarray = field(default_factory=lambda: np.zeros(0, dtype=np.float32))
     exemplars: list[np.ndarray] = field(default_factory=list)
     sub_centroids: list[np.ndarray] = field(default_factory=list)

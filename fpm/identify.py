@@ -72,6 +72,7 @@ class SessionIdentifier:
         *,
         sample_rate: int = 16_000,
         lock_min_votes: int = LOCK_MIN_VOTES,
+        consumer: str = "offline",
     ):
         self._store = store
         self._embedder = embedder
@@ -79,6 +80,7 @@ class SessionIdentifier:
         self._ws = workspace_id
         self._sr = sample_rate
         self._lock_min = lock_min_votes
+        self._consumer = consumer
 
     # ── lifecycle ────────────────────────────────────────────
 
@@ -172,9 +174,9 @@ class SessionIdentifier:
 
         # provisional (pre-lock) label — reflects the current classify result
         if res.decision == "MATCH":
-            name = self._name_of(res.voiceprint_id)
+            name = self._name_of(res.voiceprint_id)  # None if user opted to stay anonymous
             return IdentifiedSegment(seg.start, seg.end, spk, res.voiceprint_id, name,
-                                     "MATCH", res.confidence)
+                                     "MATCH" if name is not None else "ANON", res.confidence)
         return IdentifiedSegment(seg.start, seg.end, spk, None, None, res.decision, res.confidence)
 
     def _maybe_lock(self, spk: str, confidence: float) -> IdentifiedSegment | None:
@@ -189,7 +191,12 @@ class SessionIdentifier:
             vp_id = self._mint_anonymous(spk)
             label = IdentifiedSegment(0, 0, spk, vp_id, None, "ANON", confidence)
         else:
-            label = IdentifiedSegment(0, 0, spk, cand, self._name_of(cand), "MATCH", confidence)
+            # WS4 ledger: a known speaker locking in IS a use of their voiceprint.
+            self._store.log_usage(self._ws, cand, "identify", self._consumer, "matched in meeting")
+            name = self._name_of(cand)
+            # WS5: identify_allowed=False ⇒ "stay anonymous" — keep the cluster, drop the name.
+            decision = "MATCH" if name is not None else "ANON"
+            label = IdentifiedSegment(0, 0, spk, cand, name, decision, confidence)
         self._locked[spk] = label
         self._relabel_history(spk, label)
         return label
@@ -217,7 +224,11 @@ class SessionIdentifier:
         return vp.voiceprint_id
 
     def _name_of(self, vp_id: str | None) -> str | None:
+        """Human name for a voiceprint, or None when the subject opted to stay anonymous
+        (WS5 identify_allowed=False) — the cluster persists, the name is withheld."""
         if not vp_id:
+            return None
+        if not self._store.identify_allowed(self._ws, vp_id):
             return None
         vp = self._store.get(self._ws, vp_id)
         return vp.name or None if vp else None

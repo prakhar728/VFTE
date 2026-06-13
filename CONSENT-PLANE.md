@@ -4,8 +4,9 @@
 > **user-controlled** identity product — and a demo that showcases in-person recording →
 > diarization → "log in and control your own voiceprint."
 >
-> **Status:** decisions locked; demo MVP scoped; ready to build. Build is gated on an
-> explicit go — this doc is the agreed direction, not a green light to ship code.
+> **Status:** demo MVP **BUILT** (2026-06-13) on branch `feat/consent-plane` across two
+> worktrees — FPM-consent (backend) + conclave-consent (frontend + ingest route). Unmerged,
+> unpushed. See §11 for what shipped + the demo runbook.
 
 ---
 
@@ -241,3 +242,61 @@ dashboard** = login + voiceprint controls (the consent plane).
 | Voiceprint email + flags | `fpm/store/models.py`, `fpm/store/store.py` (`_SCHEMA`, `upsert`, `get`), `fpm/enroll.py` |
 | Enforcement | `fpm/enroll.py`, `fpm/match.py`, `fpm/identify.py` |
 | Ledger | `fpm/store/store.py` (extend `binding_audit` / add `usage_ledger`), hooks in enroll/identify/knowledge |
+
+---
+
+## 11. What shipped (demo MVP, 2026-06-13)
+
+Built on `feat/consent-plane` in two worktrees; unmerged + unpushed.
+
+### Backend — FPM-consent/
+- **WS3 (owner_email) + WS5 (flags):** `Voiceprint` gains `owner_email`, `enroll_allowed`,
+  `identify_allowed` (`fpm/store/models.py`); `voiceprints` schema + `upsert`/`get` carry them,
+  with an in-place **ALTER migration** so an existing real DB upgrades on open
+  (`fpm/store/store.py`). A hot **flags cache** keeps enforcement off the decrypt path.
+- **Enforcement:** `enroll.py` refuses when `enroll_allowed=False` and stamps `owner_email`
+  from the roster identity; `SessionIdentifier` / `/v1/identify` return **anonymous** (cluster
+  kept, name withheld) when `identify_allowed=False`; **forget me = delete**.
+- **WS4 ledger:** append-only `usage_ledger` (event, consumer, purpose, ts) with hooks on
+  enroll / identify / name-bind / control / forget; survives the voiceprint delete.
+- **WS2 sign-in:** standalone Google OAuth (auth-code → userinfo email) + signed session
+  cookie in `auth.py`, **alongside** the untouched M2M token auth. `FPM_DEV_LOGIN=1` gives a
+  Google-free local login.
+- **WS4 dashboard:** `consent_api.py` router + `webapp/dashboard.html` (vanilla, FPM palette):
+  per-workspace voiceprints, owner email, usage, stay-anonymous / pause-enrollment toggles,
+  forget-me. Per-row authz (`owner_email` must match the session).
+- **Tests:** `tests/test_consent.py` (12) + `tests/test_consent_api.py` (9). Full suite
+  **83 passed / 34 skipped** (skips = CAM++ model / diart absent).
+
+### Frontend + ingest — conclave-consent/
+- **WS1 Record button:** `frontend/src/components/record-meeting.tsx` (sibling of
+  `upload-transcript.tsx`), mounted at both dashboard spots; in-browser getUserMedia/
+  MediaRecorder capture; `workspaces.recordMeeting` (multipart) in `lib/api.ts`.
+- **Orchestration (decided: Conclave backend route, not browser-direct):**
+  `api/record_routes.py` `POST /api/workspaces/{id}/record` — holds the FPM + ASR tokens
+  server-side, calls FPM `/v1/diarize` + the NEAR Whisper transcription-service in parallel,
+  **merges by timestamp** (`merge_by_timestamp` → `[Alice]/[Bob]/[Speaker 3]`), and ingests
+  via the **existing upload pipeline** (reuses `meeting/[id]`). Config in `config.py`
+  (`CONCLAVE_FPM_*`, `CONCLAVE_TRANSCRIPTION_*`); `/record` 503s until configured.
+- **Tests:** `tests/test_record_routes.py` (8, FPM+ASR mocked) green; upload regression green;
+  `npm run build` clean.
+
+### Demo runbook (§9 E2E)
+1. **FPM:** `cd FPM-consent && bash scripts/fetch_models.sh` (CAM++), then run with:
+   `FPM_DATA_DIR=./data FPM_DEV_LOGIN=1 FPM_SESSION_SECRET=… FPM_AUTH_TOKENS='{"<tok>":{"name":"conclave","endpoints":["diarize","identify","voiceprints"]}}' .venv/bin/uvicorn main:app --port 8000`
+2. **Seed** 2 recognizable people (real audio for the full record→identify path):
+   `FPM_DATA_DIR=./data .venv/bin/python scripts/seed_consent_demo.py --enroll ./demo_clips`
+   (or `--synthetic` for a dashboard-only demo). Workspace id = `demo-ws`.
+3. **Transcription-service** (NEAR Whisper) running, e.g. on `:8083`.
+4. **Conclave:** set `CONCLAVE_FPM_BASE_URL=http://localhost:8000`, `CONCLAVE_FPM_API_TOKEN=<tok>`,
+   `CONCLAVE_FPM_WORKSPACE=demo-ws`, `CONCLAVE_TRANSCRIPTION_SERVICE_URL=http://localhost:8083`,
+   then run backend + `frontend` (`npm run dev`). Hit **Record** → merged `[Alice]…[Bob]…
+   [Speaker 3]…` saves as a normal meeting.
+5. **Consent plane:** open FPM `/dashboard`, sign in (Google or dev-login) as `alice@…` →
+   see voiceprint + email + usage → toggle **stay anonymous** (re-identify returns anonymous)
+   → **forget me** (voiceprint gone). All five steps verified live over HTTP on 2026-06-13.
+
+### Deferred (NOT built — per §3/§6)
+Live WS streaming, phone-P2P, crypto-shred deletion proof, re-enroll suppression tombstones,
+Conclave erasure cascade (a `# TODO(decision F)` marks the event-emit point in `consent_api.py`),
+enforcement beyond FPM, JWKS id_token signature verification (userinfo round-trip used instead).
