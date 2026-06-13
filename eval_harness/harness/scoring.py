@@ -1,6 +1,8 @@
 """Scoring vs gold — transcription WER + speaker-attribution accuracy.
 
-Gold (`gold.txt`) is `SPEAKER: text` lines (turn order + speaker, no timestamps), so:
+Gold is a turn list (speaker + text, turn order = the diarization reference, no timestamps). The
+canonical form is `gold.json` (`{"turns": [{"speaker","text"}, ...]}`); a plain `SPEAKER: text`
+`.txt` is still accepted. From either:
 - **WER** via jiwer on normalized text (vocab-on vs vocab-off → the delta is the vocab win).
 - **Speaker accuracy**: align hypothesis words to gold words (jiwer alignment), map predicted
   speakers → gold speakers (greedy by co-occurrence), and score the fraction of aligned words given
@@ -8,8 +10,10 @@ Gold (`gold.txt`) is `SPEAKER: text` lines (turn order + speaker, no timestamps)
 """
 from __future__ import annotations
 
+import json
 import re
 from collections import Counter, defaultdict
+from pathlib import Path
 
 import jiwer
 
@@ -38,6 +42,19 @@ def parse_gold(gold_text: str) -> list[tuple[str, str]]:
         spk, text = line.split(":", 1)
         turns.append((spk.strip(), text.strip()))
     return turns
+
+
+def parse_gold_json(raw: str) -> list[tuple[str, str]]:
+    """`{"turns": [{"speaker","text"}, ...]}` → [(speaker, text), ...]."""
+    data = json.loads(raw)
+    return [(str(t["speaker"]).strip(), str(t["text"]).strip()) for t in data.get("turns", [])]
+
+
+def load_gold(path: str | Path) -> list[tuple[str, str]]:
+    """Load gold turns from a file — `.json` (canonical) or `SPEAKER: text` `.txt`."""
+    path = Path(path)
+    raw = path.read_text()
+    return parse_gold_json(raw) if path.suffix == ".json" else parse_gold(raw)
 
 
 def _words_with_speakers(turns: list[tuple[str, str]]) -> list[tuple[str, str]]:

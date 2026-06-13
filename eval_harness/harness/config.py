@@ -35,7 +35,7 @@ class ExperimentConfig:
     name: str
     dir: Path
     audio: str = "audio.wav"
-    gold: str = "gold.txt"
+    gold: str = "gold.json"
     mode: str = "offline"              # offline | realtime
     asr: AsrConfig = field(default_factory=AsrConfig)
     diarizer: DiarizerConfig = field(default_factory=DiarizerConfig)
@@ -52,7 +52,7 @@ class ExperimentConfig:
             name=data.get("name", exp_dir.name),
             dir=exp_dir,
             audio=data.get("audio", "audio.wav"),
-            gold=data.get("gold", "gold.txt"),
+            gold=data.get("gold", "gold.json"),
             mode=data.get("mode", "offline"),
             asr=AsrConfig(**(data.get("asr") or {})),
             diarizer=DiarizerConfig(**(data.get("diarizer") or {})),

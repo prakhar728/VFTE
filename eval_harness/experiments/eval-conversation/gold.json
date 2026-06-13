@@ -1,0 +1,21 @@
+{
+  "name": "eval-conversation",
+  "description": "2-speaker in-person script. Turn order IS the diarization ground truth; the proper nouns (Recato, Priya, Sunnyvale, cortado, Arjun) are the vocab-biasing payoff.",
+  "speakers": {
+    "A": "first speaker",
+    "B": "second speaker"
+  },
+  "vocab": ["Recato", "Priya", "Arjun", "Sunnyvale", "cortado"],
+  "turns": [
+    { "speaker": "A", "text": "Hey, did you finish the report for Recato?" },
+    { "speaker": "B", "text": "Almost. I just need Priya to review the last part." },
+    { "speaker": "A", "text": "Cool. Is the meeting still at three?" },
+    { "speaker": "B", "text": "Yeah, three at the Sunnyvale office. Are you driving?" },
+    { "speaker": "A", "text": "I'll take the train. Want me to grab coffee?" },
+    { "speaker": "B", "text": "Please — a cortado for me, thanks." },
+    { "speaker": "A", "text": "Got it. Did Arjun send the slides yet?" },
+    { "speaker": "B", "text": "He sent them this morning. They look good." },
+    { "speaker": "A", "text": "Nice. Let's wrap up by four." },
+    { "speaker": "B", "text": "Sounds good. See you at three." }
+  ]
+}

@@ -1,7 +1,10 @@
 """C5 — WER + speaker-attribution scoring + metrics (jiwer; no models)."""
+import json
+
 from eval_harness.harness.merge import Turn
 from eval_harness.harness.metrics import offline_metrics
-from eval_harness.harness.scoring import normalize, parse_gold, speaker_accuracy, wer
+from eval_harness.harness.scoring import (load_gold, normalize, parse_gold,
+                                          parse_gold_json, speaker_accuracy, wer)
 
 GOLD = [("A", "hello world"), ("B", "bye now")]
 
@@ -17,6 +20,20 @@ def test_wer():
 
 def test_parse_gold():
     assert parse_gold("A: hi there\nB: yo\n\n# noise") == [("A", "hi there"), ("B", "yo")]
+
+
+def test_parse_gold_json():
+    raw = json.dumps({"turns": [{"speaker": "A", "text": "hi there"}, {"speaker": "B", "text": "yo"}]})
+    assert parse_gold_json(raw) == [("A", "hi there"), ("B", "yo")]
+
+
+def test_load_gold_dispatches_on_suffix(tmp_path):
+    j = tmp_path / "gold.json"
+    j.write_text(json.dumps({"turns": [{"speaker": "A", "text": "hi"}]}))
+    assert load_gold(j) == [("A", "hi")]
+    t = tmp_path / "gold.txt"
+    t.write_text("A: hi\n")
+    assert load_gold(t) == [("A", "hi")]
 
 
 def _turns(*pairs):

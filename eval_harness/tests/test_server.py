@@ -24,7 +24,7 @@ def client(tmp_path, monkeypatch):
     exp = tmp_path / "demo"
     exp.mkdir()
     (exp / "config.yaml").write_text(
-        "name: demo\nmode: offline\n"
+        "name: demo\nmode: offline\ngold: gold.txt\n"       # exercise the legacy .txt gold path
         "asr: { model: tiny, compute_type: int8, device: cpu, vocab_compare: false }\n"
         "diarizer: { engine: diart, window_sec: 5, step_sec: 0.5 }\n"
     )

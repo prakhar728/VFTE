@@ -26,7 +26,7 @@ def test_runner_end_to_end(tmp_path):
     sf.write(tmp_path / "audio.wav", clip, SR)
     (tmp_path / "gold.txt").write_text("A: alpha bravo\nB: charlie delta\n")
     (tmp_path / "config.yaml").write_text(
-        "name: e2e-smoke\nmode: offline\n"
+        "name: e2e-smoke\nmode: offline\ngold: gold.txt\n"   # exercise the legacy .txt gold path
         "asr: { model: tiny, compute_type: int8, device: cpu, vocab_compare: false }\n"
         "diarizer: { engine: diart, window_sec: 5, step_sec: 0.5 }\n"
     )

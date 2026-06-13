@@ -19,7 +19,7 @@ from pathlib import Path
 from eval_harness.harness.config import ExperimentConfig
 from eval_harness.harness.metrics import offline_metrics
 from eval_harness.harness.pipeline import load_audio, run_offline
-from eval_harness.harness.scoring import gold_text, parse_gold, speaker_accuracy, wer
+from eval_harness.harness.scoring import gold_text, load_gold, speaker_accuracy, wer
 
 
 def render_transcript(turns) -> str:
@@ -47,7 +47,7 @@ def run_experiment(exp_dir: str | Path, engine: str | None = None) -> dict:
     audio = load_audio(cfg.audio_path)
     res = run_offline(cfg, audio)
 
-    gold_turns = parse_gold(cfg.gold_path.read_text())
+    gold_turns = load_gold(cfg.gold_path)
     gt = gold_text(gold_turns)
     wer_on = wer(gt, res.asr.text)
     wer_off = wer(gt, res.asr_vocab_off.text) if res.asr_vocab_off else None

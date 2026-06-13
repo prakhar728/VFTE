@@ -9,8 +9,8 @@ Uses the **exact Recato Whisper** (`large-v3-turbo`, int8; vocab via `initial_pr
 FPM's diart + identify internals. Each experiment is a self-describing folder.
 
 ## Your workflow (you only upload audio)
-1. Pick / create an experiment folder under `experiments/<name>/` (the assistant makes `gold.txt`
-   + `config.yaml`).
+1. Pick / create an experiment folder under `experiments/<name>/` (the assistant makes `gold.json`
+   + `conversation.md` + `config.yaml`).
 2. Drop your recording as `experiments/<name>/audio.wav`.
 3. Run it (the harness needs the eval venv with faster-whisper + diart):
    ```
@@ -41,10 +41,13 @@ then run both to compare a 2-min window vs the 5s baseline (same audio).
 ```
 experiments/<name>/
   audio.wav        ← you drop this (gitignored)
-  gold.txt         speaker-labelled ground truth:  "A: ...\nB: ..."
+  gold.json        canonical ground truth the scorer compares against: {"turns":[{speaker,text}]}
+  conversation.md  the same script, human-readable (read it aloud to record)
   config.yaml      model + methodology + diarizer engine/window + vocab + mode
-  results/         result.json (metrics) + transcript.txt (gitignored)
+  results/         run output (gitignored): result.json + transcript.txt;
+                   results/<engine>/ for compare, results/compare.json for the diff
 ```
+Gold is `gold.json` (a legacy `gold.txt` of `A: …` lines is still accepted).
 
 ## config.yaml knobs
 - `mode`: `offline` (batch a file → metrics) | `realtime` (live screen + per-chunk latency).

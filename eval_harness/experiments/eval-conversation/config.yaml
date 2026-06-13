@@ -1,6 +1,6 @@
 name: eval-conversation
 audio: audio.wav          # drop your recording here (gitignored)
-gold: gold.txt
+gold: gold.json          # canonical ground truth; conversation.md is the readable copy
 mode: offline             # offline | realtime
 
 asr:

@@ -2,7 +2,7 @@ name: diart-2min-window
 # Reuses the eval-conversation recording + gold (drop audio there once) — only the window changes,
 # so you can compare a large 2-min diart window vs the 5s baseline on the SAME audio.
 audio: ../eval-conversation/audio.wav
-gold: ../eval-conversation/gold.txt
+gold: ../eval-conversation/gold.json
 mode: offline
 
 asr:
