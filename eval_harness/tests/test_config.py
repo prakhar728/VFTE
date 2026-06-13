@@ -9,6 +9,7 @@ EXP = Path(__file__).resolve().parents[1] / "experiments" / "eval-conversation"
 def test_loads_example():
     cfg = ExperimentConfig.load(EXP)
     assert cfg.name == "eval-conversation"
+    assert cfg.tag == "initial-testing"
     assert cfg.mode == "offline"
     assert cfg.asr.model == "large-v3-turbo" and cfg.asr.compute_type == "int8"
     assert cfg.asr.vocab_compare is True

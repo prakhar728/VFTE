@@ -1,19 +1,19 @@
-name: eval-conversation
+name: eval-coffee
 tag: initial-testing      # batch label — groups the first round of in-person eval recordings
 audio: audio.wav          # drop your recording here (gitignored)
-gold: gold.json          # canonical ground truth; conversation.md is the readable copy
+gold: gold.json           # canonical ground truth; conversation.md is the readable copy
 mode: offline             # offline | realtime
 
 asr:
   model: large-v3-turbo   # the exact Recato Whisper model
   compute_type: int8
   device: cpu
-  vocab: [Recato, Priya, Arjun, Sunnyvale, cortado]   # proper nouns a plain ASR fumbles
+  vocab: [Tartine, Meera, Rohan, Seattle, Mission, Patagonia]   # names/places a plain ASR fumbles
   vocab_compare: true     # run vocab-on AND vocab-off, report the WER delta
 
 diarizer:
-  engine: diart           # diart | diarizen (later)
+  engine: diart           # diart | diarizen
   window_sec: 5           # try 120 for the 2-min-window experiment
   step_sec: 0.5
 
-notes: "diart 5s baseline; vocab on/off on the eval-conversation script"
+notes: "diart 5s baseline; casual catch-up, faster/overlapping natural speech"

@@ -34,6 +34,7 @@ class DiarizerConfig:
 class ExperimentConfig:
     name: str
     dir: Path
+    tag: str = ""                      # batch/run label, e.g. "initial-testing" — groups experiments
     audio: str = "audio.wav"
     gold: str = "gold.json"
     mode: str = "offline"              # offline | realtime
@@ -51,6 +52,7 @@ class ExperimentConfig:
         return cls(
             name=data.get("name", exp_dir.name),
             dir=exp_dir,
+            tag=data.get("tag", ""),
             audio=data.get("audio", "audio.wav"),
             gold=data.get("gold", "gold.json"),
             mode=data.get("mode", "offline"),

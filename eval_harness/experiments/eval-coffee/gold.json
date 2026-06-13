@@ -1,0 +1,22 @@
+{
+  "name": "eval-coffee",
+  "tag": "initial-testing",
+  "description": "2-speaker casual catch-up. Turn order IS the diarization ground truth; the vocab payoff is everyday proper nouns (Tartine, Meera, Rohan, Seattle, Mission, Patagonia). Looser, faster speech than the standup.",
+  "speakers": {
+    "A": "first speaker",
+    "B": "second speaker"
+  },
+  "vocab": ["Tartine", "Meera", "Rohan", "Seattle", "Mission", "Patagonia"],
+  "turns": [
+    { "speaker": "A", "text": "Hey, are we still on for lunch at Tartine?" },
+    { "speaker": "B", "text": "Yeah, noon works. Is Meera joining us?" },
+    { "speaker": "A", "text": "She might. She's flying in from Seattle tonight." },
+    { "speaker": "B", "text": "Nice. Did you try that new place in the Mission?" },
+    { "speaker": "A", "text": "The taco spot? It was incredible. Get the carnitas." },
+    { "speaker": "B", "text": "Noted. I'll bring the book you lent Rohan." },
+    { "speaker": "A", "text": "Oh, the one about Patagonia? Keep it, no rush." },
+    { "speaker": "B", "text": "Thanks. See you at noon then." },
+    { "speaker": "A", "text": "Sounds good. I'll grab us a table." },
+    { "speaker": "B", "text": "Perfect, see you there." }
+  ]
+}

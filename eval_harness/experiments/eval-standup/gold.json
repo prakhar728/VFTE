@@ -1,0 +1,22 @@
+{
+  "name": "eval-standup",
+  "tag": "initial-testing",
+  "description": "2-speaker sprint-standup script. Turn order IS the diarization ground truth; the vocab payoff is denser here (names + tech jargon: Recato, Kavya, Devansh, Bangalore, Grafana, Kubernetes).",
+  "speakers": {
+    "A": "first speaker",
+    "B": "second speaker"
+  },
+  "vocab": ["Recato", "Kavya", "Devansh", "Bangalore", "Grafana", "Kubernetes"],
+  "turns": [
+    { "speaker": "A", "text": "Morning. Did the Recato build pass on staging?" },
+    { "speaker": "B", "text": "It did, but Kavya flagged a flaky test in the auth module." },
+    { "speaker": "A", "text": "Is that blocking the Bangalore demo on Friday?" },
+    { "speaker": "B", "text": "Not yet. I'll rerun it and check the metrics in Grafana." },
+    { "speaker": "A", "text": "Okay. Can you sync with Devansh about the dashboard?" },
+    { "speaker": "B", "text": "Sure. He's pushing the Kubernetes config this afternoon." },
+    { "speaker": "A", "text": "Great. Let's keep the standup to ten minutes." },
+    { "speaker": "B", "text": "Agreed. I'll post the notes in the channel." },
+    { "speaker": "A", "text": "Perfect. Ping me if the test fails again." },
+    { "speaker": "B", "text": "Will do. Talk later." }
+  ]
+}

@@ -56,7 +56,9 @@ def run_experiment(exp_dir: str | Path, engine: str | None = None) -> dict:
 
     out = {
         "name": cfg.name,
+        "tag": cfg.tag,
         "config": {
+            "tag": cfg.tag,
             "model": cfg.asr.model, "vocab": cfg.asr.vocab,
             "diarizer": cfg.diarizer.engine, "window_sec": cfg.diarizer.window_sec,
             "step_sec": cfg.diarizer.step_sec, "mode": cfg.mode, "notes": cfg.notes,
