@@ -1,9 +1,96 @@
-# AMI evaluation + chunk-size elbow sweep — plan
+# Diarization evaluation + direction — plan & conversation handoff
 
 Goal: an **automated, repeatable** evaluation on **AMI** that (a) confirms we reproduce published
 numbers (so our protocol is trustworthy), (b) finds the **chunk-size elbow** for CPU streaming
-DiariZen, and (c) compares us against **diart** and **full-batch DiariZen** on DER + latency + RAM.
-Everything CPU (prod is CPU-bound; GPU = local eval only). Status: **PLAN — awaiting go.**
+DiariZen, and (c) compares us against **diart**, **full-batch DiariZen**, and (new) **GPU Sortformer**
+on DER + latency + RAM. Status: **PLAN — paused mid-thread, continuing in a new chat.**
+
+---
+
+## Conversation handoff — full state (2026-06-13)
+
+What this whole session produced + decided, so a fresh chat can pick up:
+
+### Built + committed (branch `eval-inperson-diarization`)
+- **Eval harness** C9–C11: real DiariZen engine (`/tmp/diarizen-venv`), one-command `compare`
+  (diart vs DiariZen), record→save→run web UI. Self-contained experiment folders
+  (`config.yaml` + `gold.json` + `conversation.md`), `tag` field, 3 `initial-testing` scripts.
+- **Fingerprint-run tooling** (`eval_harness/fp_*.py`): `fp_split` (cut audio per metadata),
+  `fp_latency` (latency/RTF/RAM curve + plot), `fp_transcribe` (Whisper hypothesis), `fp_diarize`
+  (who-spoke-when timeline, `--engine diart|diarizen`), `fp_attribute` (merged `[speaker] text`
+  transcript), `fp_identify` (enroll→identify persistence).
+- **AMI DER harness already existed + committed**: `evaluation/` (`der.py` = pyannote.metrics,
+  `rttm.py`, `der_eval.py` diart) + the M2 bake-off (`docs/bakeoff-offline.md`, `der-eval.md`).
+- **New this session:** `evaluation/diarizen_eval.py` (batch DiariZen DER anchor),
+  `docs/research_doc_diarization.md`, `docs/diarization-experiment-log.md`, this plan.
+
+### Key empirical results
+- **diart-vs-DiariZen on AMI (IS1009a, ES2004a, SDM)** — DiariZen **22.7% strict / 15.3% lenient**
+  (Run 001 reproduced the committed bake-off 22.8%; harness TRUSTED), diart **32.9% strict**.
+  DiariZen over-detects speakers (5 vs 4 ref) — over-segmentation.
+- **3-person private recording** (11 min, single mic, gitignored): latency **RTF ~0.6**,
+  diarize-dominated (~63%), **bounded RAM ~2.9 GB**, linear in length. Enroll 3-min → identify 7-min:
+  **2 MATCH (cos 0.95, 0.88), 1 AMBIGUOUS** (the ~25 s quiet speaker); enroll prints contaminated
+  (E0–E1 cos 0.73) by diart's leaky spans. A 1-min enroll only captured **2 of 3 speakers**.
+
+### Decisions / architecture locked
+- **Merge is timestamp code** (`eval_harness/harness/merge.py`), not manual; its quality is **capped
+  by the diarizer**. Whisper (ASR) ∥ diarizer run in parallel → merge by overlap. FPM fingerprint is a
+  **3rd layer (identity)**, downstream of diarization — it can't recover lost short turns.
+- **Rapid-exchange / short-turn loss is the fundamental failure** of acoustic diarization on a **mono
+  mix** — true of *both* diart and DiariZen; no tool fixes it. Per-participant channels avoid it.
+- **Multi-phone (§5 of research doc) = the real fix:** browser-link, phone-per-person, near-field
+  capture → stream to TEE → per-stream ASR + **FPM as cross-talk gate** → **transcript-merge** on a
+  coarse clock. Device-login = free identity **and** free ground-truth labels. **1-phone vs 2-phone =
+  the experiment, where the 2-phone run is its own pseudo-gold.** VoxTerm already prototypes this
+  (`external/VoxTerm`, NTP transcript-merge). TDOA/audio-merge = dropped.
+- **Clustering grounding** (read the code): diart's `OnlineSpeakerClustering` and FPM's `match.py` are
+  the **same family** (cosine + centroid + new-speaker threshold). diart adds **cannot-link** (better
+  for cross-chunk *consistency*); FPM adds open-set + name-leak guard (for *identity*). **Neither
+  trains its clustering** (DiariZen = VBx, diart = algorithmic) → clustering is swappable without
+  retraining. **Streaming-DiariZen is not in the literature** (our gap), but the online-clustering tax
+  is **~3–4% DER vs batch** (worse with more speakers).
+- **train-on-GPU / infer-on-CPU is valid** (DiariZen already does it). **Sortformer = SOTA streaming,
+  123M params (~0.25–0.5 GB), GPU-optimized;** CPU RTF unpublished → estimate **batch-viable,
+  live-doubtful.** Literature support for the approach: **TS-VAD** (fingerprint-conditioned diarization,
+  CHiME-6 winner), **spatial+embedding fusion** (~34% rel. gain), ad-hoc arrays.
+- **GPU TEE was deemed unaffordable** → that's *why* the CPU plan exists. If that flips, **Sortformer
+  on a GPU TEE dominates** (SOTA, no training, no hack). This is an **economic** call, not technical.
+
+---
+
+## Open questions (carry into the next chat)
+1. **Where's the NVIDIA GPU?** This machine is Apple Silicon (no CUDA). Options raised: **Google Colab**
+   (free T4 — recommended for a quick test; run *in a notebook*, VSCode→Colab is hacky), cloud VM
+   (Lambda/RunPod/GCP), or the TEE GPU.
+2. **Is the product LIVE or BATCH?** Decides everything: live needs real-time RTF (GPU likely); batch
+   tolerates slow CPU (Sortformer-on-CPU may then be viable).
+3. **Is a confidential GPU TEE affordable for production?** If yes → Sortformer on GPU TEE (Fork A,
+   dominant). If no → CPU path (Fork B) or multi-phone (Fork C).
+4. **Is Sortformer "leagues better"** than DiariZen-batch (22.7%) / diart (32.9%) on DER? — the test below.
+5. **Sortformer CPU RTF** — unmeasured; the ship-on-cheap-CPU question hinges on it.
+6. **Single-mic-SOTA vs multi-phone (§5)** — which to prioritize for the product? Multi-phone sidesteps
+   the whole diarization-quality problem if app adoption is acceptable.
+7. **Chunked-DiariZen worth building?** Only if the ~3–4% online tax beats plain diart by enough — and
+   only if GPU-Sortformer isn't simply adopted instead.
+
+## Track G — GPU Sortformer eval (separate, parallel, "ship if leagues better")
+A standalone test of **`nvidia/diar_streaming_sortformer_4spk-v2`** (123M params) *as-is* — independent
+of the CPU/DiariZen track. Sortformer **diarizes** (Whisper still transcribes; merge as usual).
+- **Env:** isolated NeMo install (`nemo_toolkit[asr]`), on an **NVIDIA GPU** (Colab T4 fine).
+- **Accuracy (platform-independent — the "leagues better?" answer):** run on AMI (IS1009a, ES2004a) →
+  DER strict/lenient, **compare directly to DiariZen 22.7% / diart 32.9%** (reuse `evaluation/der.py`
+  + `rttm.py`). Also run on the 3-person recording → merged transcript (with Whisper) for the
+  qualitative front-end view, esp. the rapid-exchange spots.
+- **Speed:** RTF on the GPU (for live feasibility) + RTF on CPU (the ship-on-CPU-TEE question).
+- **Script:** `evaluation/sortformer_eval.py` mirroring `diarizen_eval.py` (drops into the same DER
+  harness + experiment log → directly comparable).
+- **Decision rule:** if Sortformer DER is *leagues* below DiariZen-batch on AMI + the merged transcript
+  is visibly cleaner on rapid exchange → **ship the GPU-Sortformer path**; park the CPU/DiariZen sweep
+  to run in parallel later. If it's only marginally better → the GPU cost isn't justified; stay CPU /
+  go multi-phone.
+- **Caveats:** NeMo is a heavy/finicky dep (4th env); confirm it loads + runs **offline** for the TEE;
+  Apple-Silicon local = no CUDA, so this track runs on Colab/cloud/TEE, not this Mac.
 
 ---
 
