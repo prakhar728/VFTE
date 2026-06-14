@@ -99,9 +99,50 @@ async function renderDashboard(email) {
   $("#app").innerHTML = `<div class="panel row spread">
       <span>Signed in as <b>${esc(email)}</b></span>
       <button class="ghost" id="logout">Sign out</button>
-    </div><div id="vps"><div class="empty">Loading…</div></div>`;
+    </div><div id="pending"></div><div id="vps"><div class="empty">Loading…</div></div>`;
   $("#logout").onclick = async () => { await api("/auth/logout", {method:"POST"}); boot(); };
+  await loadPending();
   await loadVoiceprints();
+}
+
+// P4 — pending identifications: someone tagged this user's voice; they confirm or deny.
+async function loadPending() {
+  let data;
+  try { data = await (await api("/v1/me/pending")).json(); }
+  catch { $("#pending").innerHTML = ""; return; }
+  const items = data.pending || [];
+  if (!items.length) { $("#pending").innerHTML = ""; return; }
+  $("#pending").innerHTML = `<div class="panel">
+    <h3 style="margin:0 0 4px;font-size:16px">People who tagged you</h3>
+    <p class="desc" style="margin:0 0 12px">Someone identified your voice in a meeting. Confirm to
+       attach your name across that workspace's transcripts, or deny to stay unnamed.</p>
+    ${items.map(renderPending).join("")}</div>`;
+  items.forEach(wirePending);
+}
+
+function renderPending(p) {
+  return `<div class="ctrl" data-pid="${esc(p.proposal_id)}">
+    <div><div class="label">${esc(p.proposed_name || "(no name proposed)")}</div>
+      <div class="desc">tagged by ${esc(p.proposed_by)} · ${esc(p.workspace_id)} · ${fmt(p.created_at)}</div></div>
+    <div class="row">
+      <button class="b-confirm">Confirm</button>
+      <button class="ghost b-deny">Deny</button>
+    </div>
+  </div>`;
+}
+
+function wirePending(p) {
+  const el = document.querySelector(`[data-pid="${CSS.escape(p.proposal_id)}"]`);
+  const act = async (path) => {
+    el.querySelectorAll("button").forEach(b => b.disabled = true);
+    const r = await api(path, {method:"POST", headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({proposal_id: p.proposal_id})});
+    if (!r.ok) { el.querySelectorAll("button").forEach(b => b.disabled = false); return; }
+    await loadPending();      // drop the handled request
+    await loadVoiceprints();  // a confirm surfaces the newly-named voiceprint
+  };
+  el.querySelector(".b-confirm").onclick = () => act("/v1/confirm");
+  el.querySelector(".b-deny").onclick = () => act("/v1/deny");
 }
 
 async function loadVoiceprints() {

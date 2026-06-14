@@ -64,6 +64,7 @@ def test_dashboard_served(client):
     c, _ = client
     r = c.get("/dashboard")
     assert r.status_code == 200 and "Your voiceprint" in r.text
+    assert "People who tagged you" in r.text  # P4 pending-inbox section present
 
 
 def test_voiceprints_require_auth(client):
@@ -120,3 +121,83 @@ def test_dev_login_sets_session(client):
     assert r.status_code in (302, 307)
     me = c.get("/v1/me").json()
     assert me["signed_in"] and me["email"] == "alice@x.com"     # lowercased
+
+
+# ── P4: confirm / deny a pending binding (session-authed) ────
+
+def test_confirm_proposal_via_session(client):
+    c, store = client
+    store.upsert(_vp("ws1", "vp_anon1", "", "", 9))            # anonymous voiceprint
+    p = store.propose("ws1", "vp_anon1", "carol@x.com", "host@x.com", "Carol")
+    _login(c, "carol@x.com")
+    r = c.post("/v1/confirm", json={"proposal_id": p["proposal_id"]})
+    assert r.status_code == 200
+    assert r.json()["status"] == "confirmed" and r.json()["name"] == "Carol"
+    vp = store.get("ws1", "vp_anon1")
+    assert vp.owner_email == "carol@x.com" and vp.name == "Carol"
+
+
+def test_confirm_requires_auth(client):
+    c, store = client
+    store.upsert(_vp("ws1", "vp_anon2", "", "", 8))
+    p = store.propose("ws1", "vp_anon2", "carol@x.com", "host@x.com", "Carol")
+    assert c.post("/v1/confirm", json={"proposal_id": p["proposal_id"]}).status_code == 401
+
+
+def test_deny_leaves_speaker_unbound(client):
+    c, store = client
+    store.upsert(_vp("ws1", "vp_anon3", "", "", 7))
+    p = store.propose("ws1", "vp_anon3", "carol@x.com", "host@x.com", "Carol")
+    _login(c, "carol@x.com")
+    r = c.post("/v1/deny", json={"proposal_id": p["proposal_id"]})
+    assert r.status_code == 200 and r.json()["status"] == "denied"
+    vp = store.get("ws1", "vp_anon3")
+    assert vp.owner_email == "" and vp.name == ""
+
+
+def test_confirm_unknown_proposal_404(client):
+    c, _ = client
+    _login(c, "carol@x.com")
+    assert c.post("/v1/confirm", json={"proposal_id": "prop_nope"}).status_code == 404
+
+
+# ── P2: only the tagged target may confirm / deny ────────────
+
+def test_confirm_by_non_target_403(client):
+    c, store = client
+    store.upsert(_vp("ws1", "vp_anon4", "", "", 6))
+    p = store.propose("ws1", "vp_anon4", "carol@x.com", "host@x.com", "Carol")
+    _login(c, "mallory@x.com")                       # not the tagged person
+    r = c.post("/v1/confirm", json={"proposal_id": p["proposal_id"]})
+    assert r.status_code == 403
+    vp = store.get("ws1", "vp_anon4")
+    assert vp.owner_email == "" and vp.name == ""    # a non-target binds nothing
+
+
+def test_deny_by_non_target_403(client):
+    c, store = client
+    store.upsert(_vp("ws1", "vp_anon5", "", "", 5))
+    p = store.propose("ws1", "vp_anon5", "carol@x.com", "host@x.com", "Carol")
+    _login(c, "mallory@x.com")
+    r = c.post("/v1/deny", json={"proposal_id": p["proposal_id"]})
+    assert r.status_code == 403
+    assert store.get_proposal(p["proposal_id"])["status"] == "pending"  # untouched
+
+
+# ── P2: the signed-in user's pending-identifications inbox ────
+
+def test_my_pending_lists_only_my_pending(client):
+    c, store = client
+    store.upsert(_vp("ws1", "vp_p1", "", "", 4))
+    store.upsert(_vp("ws1", "vp_p2", "", "", 3))
+    store.propose("ws1", "vp_p1", "carol@x.com", "host@x.com", "Carol")     # pending
+    p2 = store.propose("ws1", "vp_p2", "carol@x.com", "host@x.com", "Carol")
+    store.confirm_proposal(p2["proposal_id"], actor="carol@x.com")          # confirmed → not pending
+    _login(c, "carol@x.com")
+    data = c.get("/v1/me/pending").json()
+    assert {p["voiceprint_id"] for p in data["pending"]} == {"vp_p1"}
+
+
+def test_my_pending_requires_auth(client):
+    c, _ = client
+    assert c.get("/v1/me/pending").status_code == 401

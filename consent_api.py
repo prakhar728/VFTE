@@ -175,3 +175,57 @@ def forget_me(
     deleted = store.delete(workspace_id, voiceprint_id, actor=email)
     # TODO(deletion cascade, decision F): emit a deletion event Conclave can subscribe to.
     return {"voiceprint_id": voiceprint_id, "deleted": deleted}
+
+
+# ── P4 trust handshake: confirm / deny a pending email binding (WS2) ──
+# Session-authed (the data subject signed into this dashboard) — these are the human
+# side of the handshake; propose + consent-query stay M2M on /v1. Only the tagged
+# target may act: the binding is consent, so a third party can't confirm it for you.
+
+@router.get("/v1/me/pending")
+def my_pending(request: Request, email: str = Depends(require_user)) -> dict:
+    """The signed-in user's pending-identifications inbox (proposals tagged to their email)."""
+    return {"email": email, "pending": request.app.state.store.list_pending_for_email(email)}
+
+
+class ProposalAction(BaseModel):
+    proposal_id: str
+
+
+def _target_proposal_or_error(store, proposal_id: str, email: str) -> dict:
+    """Load a proposal and enforce that `email` is its tagged target (404 / 403)."""
+    p = store.get_proposal(proposal_id)
+    if p is None:
+        raise HTTPException(404, "proposal not found")
+    if (p["proposed_email"] or "").lower() != email.lower():
+        raise HTTPException(403, "not your proposal")
+    return p
+
+
+@router.post("/v1/confirm")
+def confirm_proposal_endpoint(
+    request: Request, body: ProposalAction, email: str = Depends(require_user),
+) -> dict:
+    """Confirm a pending binding → bind owner_email + name (reuses the audited store path).
+
+    Only the tagged target (`proposed_email == session email`) may confirm.
+    """
+    store = request.app.state.store
+    _target_proposal_or_error(store, body.proposal_id, email)
+    binding = store.confirm_proposal(body.proposal_id, actor=email)
+    return {"proposal_id": body.proposal_id, "status": "confirmed", **binding}
+
+
+@router.post("/v1/deny")
+def deny_proposal_endpoint(
+    request: Request, body: ProposalAction, email: str = Depends(require_user),
+) -> dict:
+    """Deny a pending binding → no name attaches (the speaker stays `Speaker N`).
+
+    Only the tagged target may deny.
+    """
+    store = request.app.state.store
+    _target_proposal_or_error(store, body.proposal_id, email)
+    res = store.deny_proposal(body.proposal_id, actor=email)
+    return {"proposal_id": body.proposal_id, "status": "denied",
+            "voiceprint_id": res["voiceprint_id"]}

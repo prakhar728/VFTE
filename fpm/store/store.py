@@ -51,8 +51,30 @@ CREATE TABLE IF NOT EXISTS usage_ledger(
   id INTEGER PRIMARY KEY AUTOINCREMENT, workspace_id TEXT, voiceprint_id TEXT,
   event TEXT, consumer TEXT, purpose TEXT, ts TEXT);
 CREATE INDEX IF NOT EXISTS idx_ledger_vp ON usage_ledger(workspace_id, voiceprint_id);
+-- P4 trust handshake: pending email-binding proposals. A host tags a voiceprint
+-- (name+email) → a pending proposal; the data subject confirms/denies on the consent
+-- dashboard. owner_email binds only on confirm (via claim_owner+set_name). Idempotent
+-- per (workspace, voiceprint, email) so re-tagging never duplicates.
+CREATE TABLE IF NOT EXISTS proposals(
+  proposal_id    TEXT PRIMARY KEY,
+  workspace_id   TEXT NOT NULL,
+  voiceprint_id  TEXT NOT NULL,
+  proposed_email TEXT NOT NULL,
+  proposed_by    TEXT NOT NULL,
+  proposed_name  TEXT NOT NULL DEFAULT '',
+  status         TEXT NOT NULL DEFAULT 'pending',  -- pending | confirmed | denied
+  created_at TEXT, confirmed_at TEXT, denied_at TEXT);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_proposal_unique
+  ON proposals(workspace_id, voiceprint_id, proposed_email);
+CREATE INDEX IF NOT EXISTS idx_proposal_email ON proposals(proposed_email);
 CREATE TABLE IF NOT EXISTS store_meta(key TEXT PRIMARY KEY, value TEXT);
 """
+
+# Column order for proposal-row reads → dict (the C4 wire shape).
+_PROPOSAL_COLS = (
+    "proposal_id", "workspace_id", "voiceprint_id", "proposed_email", "proposed_by",
+    "proposed_name", "status", "created_at", "confirmed_at", "denied_at",
+)
 
 # Columns added to `voiceprints` after the original A.5 schema shipped; applied via
 # ALTER on open so an existing real DB upgrades in place (CREATE IF NOT EXISTS won't
@@ -70,6 +92,10 @@ def _now() -> str:
 
 def new_voiceprint_id() -> str:
     return "vp_" + uuid.uuid4().hex[:16]
+
+
+def new_proposal_id() -> str:
+    return "prop_" + uuid.uuid4().hex[:16]
 
 
 class VoiceprintStore:
@@ -315,6 +341,125 @@ class VoiceprintStore:
             for row in self._conn.execute(
                 "SELECT workspace_id, voiceprint_id FROM voiceprints WHERE owner_email=? ORDER BY workspace_id",
                 (owner_email,),
+            )
+        ]
+
+    # ── proposals (P4 trust handshake) ───────────────────────
+
+    def _proposal_dict(self, row) -> dict:
+        return dict(zip(_PROPOSAL_COLS, row))
+
+    def get_proposal(self, proposal_id: str) -> dict | None:
+        r = self._conn.execute(
+            f"SELECT {', '.join(_PROPOSAL_COLS)} FROM proposals WHERE proposal_id=?",
+            (proposal_id,),
+        ).fetchone()
+        return self._proposal_dict(r) if r else None
+
+    def propose(
+        self, workspace_id: str, voiceprint_id: str, proposed_email: str,
+        proposed_by: str, proposed_name: str = "",
+    ) -> dict:
+        """Create (or return the existing) pending email-binding proposal.
+
+        Idempotent per (workspace, voiceprint, email): re-tagging the same person on the
+        same voiceprint returns the original proposal unchanged (no duplicate row; the
+        original proposed_name/proposed_by are retained). `owner_email` binds only on
+        confirm (claim_owner+set_name), never here. Emails are stored lowercased.
+        """
+        email = proposed_email.lower()
+        by = proposed_by.lower()
+        with self._lock:
+            existing = self._conn.execute(
+                f"SELECT {', '.join(_PROPOSAL_COLS)} FROM proposals "
+                "WHERE workspace_id=? AND voiceprint_id=? AND proposed_email=?",
+                (workspace_id, voiceprint_id, email),
+            ).fetchone()
+            if existing:
+                return self._proposal_dict(existing)
+            pid = new_proposal_id()
+            self._conn.execute(
+                "INSERT INTO proposals (proposal_id, workspace_id, voiceprint_id, proposed_email,"
+                " proposed_by, proposed_name, status, created_at) VALUES (?,?,?,?,?,?,'pending',?)",
+                (pid, workspace_id, voiceprint_id, email, by, proposed_name, _now()),
+            )
+            self._conn.commit()
+            return self.get_proposal(pid)
+
+    def confirm_proposal(self, proposal_id: str, actor: str | None = None) -> dict | None:
+        """Confirm a pending proposal → bind owner_email + name.
+
+        Reuses `claim_owner` + `set_name` (both audited → binding_audit + usage_ledger), so
+        a confirmed binding is reversible and traceable like any other name bind. Idempotent
+        on an already-confirmed proposal (the bind runs exactly once). Returns
+        `{voiceprint_id, name, owner_email}`, or None if the proposal is unknown.
+
+        Consent-bypass guard: when `identify_allowed=False` (the data subject chose
+        stay-anonymous), confirm still binds `owner_email` but writes/surfaces NO name —
+        revoked consent can never be re-attached by a later tag. consent_resolve gates on
+        the same flag, so the name stays withheld at read time too.
+        """
+        p = self.get_proposal(proposal_id)
+        if p is None:
+            return None
+        ws, vid, email, name = p["workspace_id"], p["voiceprint_id"], p["proposed_email"], p["proposed_name"]
+        allowed = self.identify_allowed(ws, vid)
+        if p["status"] != "confirmed":
+            # claim_owner / set_name each take self._lock — call them OUTSIDE the lock below.
+            self.claim_owner(ws, vid, email)
+            if allowed:
+                self.set_name(ws, vid, name, actor=actor or email)
+            with self._lock:
+                self._conn.execute(
+                    "UPDATE proposals SET status='confirmed', confirmed_at=? WHERE proposal_id=?",
+                    (_now(), proposal_id),
+                )
+                self._conn.commit()
+        return {"voiceprint_id": vid, "name": (name if allowed else None), "owner_email": email}
+
+    def deny_proposal(self, proposal_id: str, actor: str | None = None) -> dict | None:
+        """Deny a proposal → mark denied, no binding (the speaker stays `Speaker N`).
+
+        Idempotent on an already-denied proposal. Returns `{voiceprint_id, status}` or None
+        if unknown. Binding removal for an already-confirmed voiceprint is P5 (redaction),
+        not here — deny only blocks an outstanding proposal.
+        """
+        p = self.get_proposal(proposal_id)
+        if p is None:
+            return None
+        if p["status"] != "denied":
+            with self._lock:
+                self._conn.execute(
+                    "UPDATE proposals SET status='denied', denied_at=? WHERE proposal_id=?",
+                    (_now(), proposal_id),
+                )
+                self._conn.commit()
+        return {"voiceprint_id": p["voiceprint_id"], "status": "denied"}
+
+    def consent_resolve(self, workspace_id: str, voiceprint_id: str) -> dict:
+        """Read-side consent projection: `{name, owner_email, visibility}`.
+
+        The single gate Conclave trusts at projection time. `name` is None whenever the
+        voiceprint is unknown, has `identify_allowed=False` (mirrors the /v1/identify gate),
+        or carries no name. visibility ∈ {named, anonymous, unknown}.
+        """
+        vp = self.get(workspace_id, voiceprint_id)
+        if vp is None:
+            return {"name": None, "owner_email": None, "visibility": "unknown"}
+        owner = vp.owner_email or None
+        if not vp.identify_allowed or not vp.name:
+            return {"name": None, "owner_email": owner, "visibility": "anonymous"}
+        return {"name": vp.name, "owner_email": owner, "visibility": "named"}
+
+    def list_pending_for_email(self, proposed_email: str) -> list[dict]:
+        """All still-pending proposals tagged to an email (the consent inbox feed)."""
+        email = proposed_email.lower()
+        return [
+            self._proposal_dict(r)
+            for r in self._conn.execute(
+                f"SELECT {', '.join(_PROPOSAL_COLS)} FROM proposals "
+                "WHERE proposed_email=? AND status='pending' ORDER BY created_at",
+                (email,),
             )
         ]
 

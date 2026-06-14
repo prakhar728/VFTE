@@ -96,3 +96,21 @@ SESSION_TTL_SEC = int(os.environ.get("FPM_SESSION_TTL_SEC", str(7 * 24 * 3600)))
 # Dev convenience: when set (and Google creds absent), /auth/dev-login?email= signs you
 # in without Google — for running the demo locally. NEVER enable in production.
 DEV_LOGIN = os.environ.get("FPM_DEV_LOGIN", "").lower() in ("1", "true", "yes")
+# P4 dev flag: collapse propose→confirm with no email/no pending so the binding→
+# re-resolve→projection spine can be exercised before email/permissions exist
+# (Phase 1). Rides the real propose→confirm path. Default OFF; Phase 2 flips it off
+# permanently and the only auto-confirm left is the specced self-tag. NEVER on in prod.
+CONSENT_AUTOCONFIRM = os.environ.get("FPM_CONSENT_AUTOCONFIRM", "").lower() in ("1", "true", "yes")
+# P4 Phase 2: FPM-routed notify email on a pending host-tag (decision §10). Off → log only
+# (safe for dev/tests; no provider needed). The mail is notify-only ("you've been identified
+# in workspace X — sign in to confirm") — transcript content never leaves the enclave.
+NOTIFY_EMAIL = os.environ.get("FPM_NOTIFY_EMAIL", "").lower() in ("1", "true", "yes")
+# SMTP transport for the notify email (used only when NOTIFY_EMAIL is on). For a Gmail
+# demo: host=smtp.gmail.com, port=587, user=<you>@gmail.com, pass=<app password>. The
+# message is notify-only and links to the consent dashboard; no transcript content.
+SMTP_HOST = os.environ.get("FPM_SMTP_HOST", "")
+SMTP_PORT = int(os.environ.get("FPM_SMTP_PORT", "587"))
+SMTP_USER = os.environ.get("FPM_SMTP_USER", "")
+SMTP_PASS = os.environ.get("FPM_SMTP_PASS", "")
+NOTIFY_FROM = os.environ.get("FPM_NOTIFY_FROM", "") or SMTP_USER
+DASHBOARD_URL = os.environ.get("FPM_DASHBOARD_URL", "http://localhost:8091/dashboard")
