@@ -54,6 +54,12 @@ AMBIGUOUS_MARGIN = float(os.environ.get("FPM_AMBIGUOUS_MARGIN", "0.10"))  # best
 # sigmoid-calibrated confidence: conf = sigmoid(alpha*cos + beta); fitted at E.1
 SCORE_ALPHA = float(os.environ.get("FPM_SCORE_ALPHA", "15.5"))
 SCORE_BETA = float(os.environ.get("FPM_SCORE_BETA", "-7.67"))
+# P3 quality gate (branch C): a diarized span must be at least this long to contribute
+# an exemplar / justify minting an anonymous voiceprint — weak/short spans embed
+# unreliably and would pollute the centroid. Voting + MATCH-lock stay permissive (NOT
+# gated), so hard-to-ID speakers still stabilize. Default 1.0 s ≈ the embedder's own
+# minimum, so existing behaviour is unchanged; tune via FPM_MIN_SEGMENT_SEC.
+MIN_SEGMENT_SEC = float(os.environ.get("FPM_MIN_SEGMENT_SEC", "1.0"))
 
 # --- enrollment ---
 ENROLL_QUALITY_MIN = float(os.environ.get("FPM_ENROLL_QUALITY_MIN", "0.50"))  # min self-sim to centroid

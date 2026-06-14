@@ -129,3 +129,54 @@ def test_offline_default_still_writes(ctx):
     _run(store, emb, audio, script)  # default writer
     ids = set(store.list_ids("ws1"))
     assert alice_id in ids and len(ids) == 2  # Alice + one minted anon
+
+
+# ── P3: confidence / min-duration gate ────────────────────────────────
+
+def _only_id(store, ws):
+    ids = store.list_ids(ws)
+    return ids[0] if ids else None
+
+
+def test_gate_excludes_short_from_exemplars(ctx, monkeypatch):
+    """A short-but-embeddable segment is dropped from the minted centroid (duration
+    gate, not the embedder). lock_min_votes=3 so all three segments are seen first."""
+    store, emb = ctx
+    # 3 spkB turns sliced as durations [2 s, 4 s, 4 s] — all embeddable (>=1 s).
+    audio = np.concatenate([_wav("spkB_1"), _wav("spkB_1"), _wav("spkB_1")])
+    script = [Segment(0, 2, "s0"), Segment(4, 8, "s0"), Segment(8, 12, "s0")]
+
+    monkeypatch.setattr(config, "MIN_SEGMENT_SEC", 0.0)        # ungated
+    _run(store, emb, audio, script, ws="wsU", lock_min_votes=3)
+    assert len(store.get("wsU", _only_id(store, "wsU")).exemplars) == 3
+
+    monkeypatch.setattr(config, "MIN_SEGMENT_SEC", 3.0)        # gates the 2 s span
+    _run(store, emb, audio, script, ws="wsG", lock_min_votes=3)
+    assert len(store.get("wsG", _only_id(store, "wsG")).exemplars) == 2
+
+
+def test_gate_blocks_mint_for_all_short(ctx, monkeypatch):
+    """A speaker whose every segment is sub-floor never mints → permanently unnameable."""
+    monkeypatch.setattr(config, "MIN_SEGMENT_SEC", 5.0)        # all 4 s turns gated
+    store, emb = ctx
+    audio = np.concatenate([_wav("spkB_1"), _wav("spkB_1"), _wav("spkB_1")])
+    script = [Segment(0, 4, "s0"), Segment(4, 8, "s0"), Segment(8, 12, "s0")]
+    _, out = _run(store, emb, audio, script, ws="wsx")
+    assert store.list_ids("wsx") == []                        # nothing minted
+    assert all(s.voiceprint_id is None for s in out)          # stays unnameable
+    assert all(s.decision != "LOCKED" for s in out)           # never locks to an id
+
+
+def test_gate_does_not_block_vote_or_match_lock(ctx, monkeypatch):
+    """Even with every segment gated from exemplar-append, an enrolled speaker still
+    vote-MATCH-locks and retro-relabels — voting and MATCH-lock are NOT gated."""
+    monkeypatch.setattr(config, "MIN_SEGMENT_SEC", 5.0)
+    store, emb = ctx
+    enroll(store, emb, "ws1", "Alice", _wav("spkA_1"), SR)
+    alice_id = identity_voiceprint_id("ws1", "Alice")
+    audio = np.concatenate([_wav("spkA_1"), _wav("spkA_2"), _wav("spkA_1")])
+    script = [Segment(0, 4, "s0"), Segment(4, 8, "s0"), Segment(8, 12, "s0")]
+    ident, _ = _run(store, emb, audio, script)
+    sealed = ident.seal()
+    assert any(s.decision == "LOCKED" for s in sealed)
+    assert all(s.voiceprint_id == alice_id for s in sealed if s.voiceprint_id)

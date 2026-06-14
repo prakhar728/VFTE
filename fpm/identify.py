@@ -39,6 +39,8 @@ from dataclasses import dataclass
 
 import numpy as np
 
+import config  # module-attr access so MIN_SEGMENT_SEC is monkeypatch-tunable in tests
+
 from .diarize.base import Segment, StreamingDiarizer
 from .match import classify
 from .store.models import Voiceprint
@@ -164,13 +166,16 @@ class SessionIdentifier:
         if emb is None:                                     # too short to ID yet
             return IdentifiedSegment(seg.start, seg.end, spk, None, None, "PENDING", 0.0)
 
-        self._exemplars.setdefault(spk, [])
-        if len(self._exemplars[spk]) < 20:
-            self._exemplars[spk].append(emb)
-
         res = classify(emb, self._store.centroids(self._ws))
         votes = self._votes.setdefault(spk, Counter())
-        votes[res.voiceprint_id if res.decision == "MATCH" else _UNKNOWN] += 1
+        votes[res.voiceprint_id if res.decision == "MATCH" else _UNKNOWN] += 1  # vote ALWAYS (ungated)
+
+        # P3 gate: only strong spans contribute an exemplar to a (future) minted centroid.
+        # Voting above is untouched, so weak speakers still vote-lock / MATCH normally.
+        if self._passes_gate(seg, res):
+            self._exemplars.setdefault(spk, [])
+            if len(self._exemplars[spk]) < 20:
+                self._exemplars[spk].append(emb)
 
         locked = self._maybe_lock(spk, res.confidence)
         if locked is not None:
@@ -193,9 +198,16 @@ class SessionIdentifier:
             return None
 
         if cand == _UNKNOWN:
-            # P1 read-only: mint nothing — lock to a stable session-local label
-            # (voiceprint_id=None), kept stable via local_speaker. Offline writer mints.
-            vp_id = None if self._read_only else self._mint_anonymous(spk)
+            if self._read_only:
+                # P1 read-only: mint nothing — lock to a stable session-local label
+                # (voiceprint_id=None), kept stable via local_speaker.
+                vp_id = None
+            elif self._exemplars.get(spk):
+                # P3 gate: mint only with >=1 gate-passing exemplar. A speaker whose every
+                # span was sub-floor has none → don't lock; keep voting (may MATCH later).
+                vp_id = self._mint_anonymous(spk)
+            else:
+                return None
             label = IdentifiedSegment(0, 0, spk, vp_id, None, "ANON", confidence)
         else:
             # WS4 ledger: a known speaker locking in IS a use of their voiceprint.
@@ -222,6 +234,20 @@ class SessionIdentifier:
                 h.decision = "RELABELED"
                 n += 1
         return n
+
+    def _passes_gate(self, seg: Segment, res) -> bool:
+        """P3 quality gate for exemplar-append (and, via accumulated exemplars, mint).
+
+        A span must be long enough to embed reliably and not be AMBIGUOUS (top-2 too
+        close → likely overlapped speech, which would pollute a centroid). LOW stays
+        admissible so a genuinely new speaker who scores near an existing centroid can
+        still mint. Reads `config.MIN_SEGMENT_SEC` via module attr so tests can tune it.
+        """
+        if seg.duration < config.MIN_SEGMENT_SEC:
+            return False
+        if res.decision == "AMBIGUOUS":
+            return False
+        return True
 
     def _mint_anonymous(self, spk: str) -> str:
         vp = Voiceprint(new_voiceprint_id(), self._ws, name="")
