@@ -158,3 +158,26 @@ def test_confirm_unknown_proposal_404(client):
     c, _ = client
     _login(c, "carol@x.com")
     assert c.post("/v1/confirm", json={"proposal_id": "prop_nope"}).status_code == 404
+
+
+# ── P2: only the tagged target may confirm / deny ────────────
+
+def test_confirm_by_non_target_403(client):
+    c, store = client
+    store.upsert(_vp("ws1", "vp_anon4", "", "", 6))
+    p = store.propose("ws1", "vp_anon4", "carol@x.com", "host@x.com", "Carol")
+    _login(c, "mallory@x.com")                       # not the tagged person
+    r = c.post("/v1/confirm", json={"proposal_id": p["proposal_id"]})
+    assert r.status_code == 403
+    vp = store.get("ws1", "vp_anon4")
+    assert vp.owner_email == "" and vp.name == ""    # a non-target binds nothing
+
+
+def test_deny_by_non_target_403(client):
+    c, store = client
+    store.upsert(_vp("ws1", "vp_anon5", "", "", 5))
+    p = store.propose("ws1", "vp_anon5", "carol@x.com", "host@x.com", "Carol")
+    _login(c, "mallory@x.com")
+    r = c.post("/v1/deny", json={"proposal_id": p["proposal_id"]})
+    assert r.status_code == 403
+    assert store.get_proposal(p["proposal_id"])["status"] == "pending"  # untouched

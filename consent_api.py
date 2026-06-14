@@ -179,21 +179,34 @@ def forget_me(
 
 # ── P4 trust handshake: confirm / deny a pending email binding (WS2) ──
 # Session-authed (the data subject signed into this dashboard) — these are the human
-# side of the handshake; propose + consent-query stay M2M on /v1. Phase 1 lets any
-# valid session confirm (single-actor spine); Phase 2 enforces target-only authz.
+# side of the handshake; propose + consent-query stay M2M on /v1. Only the tagged
+# target may act: the binding is consent, so a third party can't confirm it for you.
 
 class ProposalAction(BaseModel):
     proposal_id: str
+
+
+def _target_proposal_or_error(store, proposal_id: str, email: str) -> dict:
+    """Load a proposal and enforce that `email` is its tagged target (404 / 403)."""
+    p = store.get_proposal(proposal_id)
+    if p is None:
+        raise HTTPException(404, "proposal not found")
+    if (p["proposed_email"] or "").lower() != email.lower():
+        raise HTTPException(403, "not your proposal")
+    return p
 
 
 @router.post("/v1/confirm")
 def confirm_proposal_endpoint(
     request: Request, body: ProposalAction, email: str = Depends(require_user),
 ) -> dict:
-    """Confirm a pending binding → bind owner_email + name (reuses the audited store path)."""
-    binding = request.app.state.store.confirm_proposal(body.proposal_id, actor=email)
-    if binding is None:
-        raise HTTPException(404, "proposal not found")
+    """Confirm a pending binding → bind owner_email + name (reuses the audited store path).
+
+    Only the tagged target (`proposed_email == session email`) may confirm.
+    """
+    store = request.app.state.store
+    _target_proposal_or_error(store, body.proposal_id, email)
+    binding = store.confirm_proposal(body.proposal_id, actor=email)
     return {"proposal_id": body.proposal_id, "status": "confirmed", **binding}
 
 
@@ -201,9 +214,12 @@ def confirm_proposal_endpoint(
 def deny_proposal_endpoint(
     request: Request, body: ProposalAction, email: str = Depends(require_user),
 ) -> dict:
-    """Deny a pending binding → no name attaches (the speaker stays `Speaker N`)."""
-    res = request.app.state.store.deny_proposal(body.proposal_id, actor=email)
-    if res is None:
-        raise HTTPException(404, "proposal not found")
+    """Deny a pending binding → no name attaches (the speaker stays `Speaker N`).
+
+    Only the tagged target may deny.
+    """
+    store = request.app.state.store
+    _target_proposal_or_error(store, body.proposal_id, email)
+    res = store.deny_proposal(body.proposal_id, actor=email)
     return {"proposal_id": body.proposal_id, "status": "denied",
             "voiceprint_id": res["voiceprint_id"]}
