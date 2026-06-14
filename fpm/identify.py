@@ -73,6 +73,7 @@ class SessionIdentifier:
         sample_rate: int = 16_000,
         lock_min_votes: int = LOCK_MIN_VOTES,
         consumer: str = "offline",
+        read_only: bool = False,
     ):
         self._store = store
         self._embedder = embedder
@@ -81,6 +82,10 @@ class SessionIdentifier:
         self._sr = sample_rate
         self._lock_min = lock_min_votes
         self._consumer = consumer
+        # P1: live (diart) path — classify + vote-lock in memory for stable session
+        # labels, but mint nothing and write nothing to the store (single-writer: the
+        # post pass is the sole authoritative writer). Default False = offline writer.
+        self._read_only = read_only
 
     # ── lifecycle ────────────────────────────────────────────
 
@@ -188,11 +193,15 @@ class SessionIdentifier:
             return None
 
         if cand == _UNKNOWN:
-            vp_id = self._mint_anonymous(spk)
+            # P1 read-only: mint nothing — lock to a stable session-local label
+            # (voiceprint_id=None), kept stable via local_speaker. Offline writer mints.
+            vp_id = None if self._read_only else self._mint_anonymous(spk)
             label = IdentifiedSegment(0, 0, spk, vp_id, None, "ANON", confidence)
         else:
             # WS4 ledger: a known speaker locking in IS a use of their voiceprint.
-            self._store.log_usage(self._ws, cand, "identify", self._consumer, "matched in meeting")
+            # P1 read-only writes nothing — skip the ledger row (still resolve for display).
+            if not self._read_only:
+                self._store.log_usage(self._ws, cand, "identify", self._consumer, "matched in meeting")
             name = self._name_of(cand)
             # WS5: identify_allowed=False ⇒ "stay anonymous" — keep the cluster, drop the name.
             decision = "MATCH" if name is not None else "ANON"
