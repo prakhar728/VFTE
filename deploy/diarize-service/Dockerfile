@@ -19,8 +19,16 @@ RUN apt-get update \
 
 WORKDIR /app
 
-# 1) the torch-2.1.1 pin-set + pyannote stack + DiariZen runtime deps + FastAPI/uvicorn.
+# 0) CPU-ONLY torch FIRST — this box has no GPU. Installing torch/torchaudio 2.1.1
+#    from the PyTorch CPU index satisfies requirements-diarizen.txt's torch==2.1.1
+#    pin with the +cpu wheels, so the next pip never pulls the ~2-3 GB NVIDIA CUDA
+#    libraries (cudnn/nvrtc/…). Slashes image size + build/push/pull time.
+RUN pip install --no-cache-dir torch==2.1.1 torchaudio==2.1.1 \
+    --index-url https://download.pytorch.org/whl/cpu
+
+# 1) the rest of the torch-2.1.1 pin-set + pyannote stack + DiariZen runtime deps.
 # requirements-diarizen.txt already pins fastapi + python-multipart + httpx; add the server.
+# torch is already satisfied (+cpu) → pip leaves it, no CUDA download here.
 COPY requirements-diarizen.txt .
 RUN pip install --no-cache-dir -r requirements-diarizen.txt "uvicorn[standard]>=0.30"
 
