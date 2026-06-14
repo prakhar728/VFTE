@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
+import Image from "next/image";
 
 import { api, authUrls, type Me } from "@/lib/api";
 import { Button } from "@/components/ui/button";
@@ -49,9 +50,8 @@ export default function SignInPage() {
       <div className="w-full max-w-sm animate-rise">
         {/* mark */}
         <div className="mb-8 flex flex-col items-center text-center">
-          <div className="relative mb-5 flex size-14 items-center justify-center rounded-2xl border border-border bg-card">
-            <span className="absolute inset-0 rounded-2xl bg-primary/10 blur-md" />
-            <Waveform />
+          <div className="relative mb-5 size-20 overflow-hidden rounded-2xl border border-border">
+            <Image src="/vfte-logo.png" alt="VFTE" fill sizes="80px" priority className="object-cover" />
           </div>
           <h1 className="text-[1.65rem] font-semibold tracking-tight">
             Your voice, your keys.
@@ -126,21 +126,5 @@ export default function SignInPage() {
         </p>
       </div>
     </main>
-  );
-}
-
-function Waveform() {
-  // a small emerald voiceprint glyph
-  const bars = [10, 20, 14, 28, 18, 24, 12];
-  return (
-    <div className="relative flex h-6 items-center gap-[3px]">
-      {bars.map((h, i) => (
-        <span
-          key={i}
-          className="w-[3px] rounded-full bg-primary"
-          style={{ height: `${h}px`, opacity: 0.55 + (i % 3) * 0.15 }}
-        />
-      ))}
-    </div>
   );
 }
