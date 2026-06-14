@@ -393,24 +393,29 @@ class VoiceprintStore:
         a confirmed binding is reversible and traceable like any other name bind. Idempotent
         on an already-confirmed proposal (the bind runs exactly once). Returns
         `{voiceprint_id, name, owner_email}`, or None if the proposal is unknown.
-        (Phase 2 adds the consent-bypass guard: identify_allowed=False binds the owner but
-        surfaces no name.)
+
+        Consent-bypass guard: when `identify_allowed=False` (the data subject chose
+        stay-anonymous), confirm still binds `owner_email` but writes/surfaces NO name —
+        revoked consent can never be re-attached by a later tag. consent_resolve gates on
+        the same flag, so the name stays withheld at read time too.
         """
         p = self.get_proposal(proposal_id)
         if p is None:
             return None
         ws, vid, email, name = p["workspace_id"], p["voiceprint_id"], p["proposed_email"], p["proposed_name"]
+        allowed = self.identify_allowed(ws, vid)
         if p["status"] != "confirmed":
             # claim_owner / set_name each take self._lock — call them OUTSIDE the lock below.
             self.claim_owner(ws, vid, email)
-            self.set_name(ws, vid, name, actor=actor or email)
+            if allowed:
+                self.set_name(ws, vid, name, actor=actor or email)
             with self._lock:
                 self._conn.execute(
                     "UPDATE proposals SET status='confirmed', confirmed_at=? WHERE proposal_id=?",
                     (_now(), proposal_id),
                 )
                 self._conn.commit()
-        return {"voiceprint_id": vid, "name": name, "owner_email": email}
+        return {"voiceprint_id": vid, "name": (name if allowed else None), "owner_email": email}
 
     def deny_proposal(self, proposal_id: str, actor: str | None = None) -> dict | None:
         """Deny a proposal → mark denied, no binding (the speaker stays `Speaker N`).

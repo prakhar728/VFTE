@@ -140,6 +140,21 @@ def test_confirm_and_deny_unknown_return_none(store):
     assert store.deny_proposal("prop_nope") is None
 
 
+def test_confirm_consent_bypass_binds_owner_but_no_name(store):
+    """identify_allowed=False (stay-anonymous): confirm binds owner_email but surfaces NO
+    name — neither written nor returned, and consent_resolve stays null. Revoked consent
+    can never be bypassed by a later tag (architecture §5 P5 / P4 step 12)."""
+    vid = _named(store, "ws1", "", "", identify_allowed=False)  # anonymous + consent off
+    p = store.propose("ws1", vid, "alice@x.com", "host@x.com", "Alice")
+    res = store.confirm_proposal(p["proposal_id"], actor="alice@x.com")
+    assert res["owner_email"] == "alice@x.com"   # owner still binds
+    assert res["name"] is None                    # name withheld in the return
+    vp = store.get("ws1", vid)
+    assert vp.owner_email == "alice@x.com" and vp.name == ""   # no name written to the store
+    r = store.consent_resolve("ws1", vid)
+    assert r["name"] is None and r["visibility"] == "anonymous"  # read gate also null
+
+
 def test_list_pending_for_email(store):
     v1, v2, v3 = _anon(store), _anon(store), _anon(store)
     store.propose("ws1", v1, "alice@x.com", "host@x.com", "Alice")
