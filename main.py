@@ -286,6 +286,7 @@ async def diarize_endpoint(
 class Binding(BaseModel):
     voiceprint_id: str
     name: str
+    email: str | None = None  # P4: when present, bind owner_email (confirmed proposal), not just a name
 
 
 class KnowledgeRequest(BaseModel):
@@ -305,14 +306,27 @@ async def knowledge_endpoint(
     Each binding is workspace-checked and audited in the store; binding a name a
     voiceprint already has, or one not in this workspace, is a no-op (returns it in
     `not_found`). Re-binding is allowed (reversible) and leaves an audit trail.
+
+    P4: an **email-bearing** binding evolves the legacy `set_name` into an
+    `owner_email` binding — a self-confirmed proposal (claim_owner + set_name) — so the
+    name becomes a projection of the consented owner. A bare-name binding keeps the
+    legacy `set_name` path unchanged (back-compat).
     """
     if not caller.allows_workspace(body.workspace):
         raise HTTPException(403, f"caller '{caller.name}' not authorized for workspace '{body.workspace}'")
     store = request.app.state.store
     bound, not_found = [], []
     for b in body.bindings:
-        ok = store.set_name(body.workspace, b.voiceprint_id, b.name, actor=caller.name)
-        (bound if ok else not_found).append(b.voiceprint_id)
+        if b.email:
+            if store.get(body.workspace, b.voiceprint_id) is None:
+                not_found.append(b.voiceprint_id)
+                continue
+            p = store.propose(body.workspace, b.voiceprint_id, b.email, b.email, b.name)
+            store.confirm_proposal(p["proposal_id"], actor=caller.name)
+            bound.append(b.voiceprint_id)
+        else:
+            ok = store.set_name(body.workspace, b.voiceprint_id, b.name, actor=caller.name)
+            (bound if ok else not_found).append(b.voiceprint_id)
     if body.vocab_terms:
         store.set_vocab(body.workspace, body.vocab_terms)
     return {"bound": bound, "not_found": not_found, "vocab_terms": len(body.vocab_terms)}

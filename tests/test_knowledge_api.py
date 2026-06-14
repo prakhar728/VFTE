@@ -84,3 +84,29 @@ def test_recato_blocked_from_knowledge(client):
 
 def test_missing_token_401(client):
     assert _post(client, {"workspace": "ws1"}, token=None).status_code == 401
+
+
+# ── P4: email-bearing binding evolves set_name → self-confirmed proposal ──
+
+def test_email_binding_creates_confirmed_owner_binding(client):
+    vp = _anon(client._store)
+    r = _post(client, {"workspace": "ws1",
+                       "bindings": [{"voiceprint_id": vp, "name": "Carol", "email": "carol@x.com"}]})
+    assert r.status_code == 200 and r.json()["bound"] == [vp]
+    v = client._store.get("ws1", vp)
+    assert v.name == "Carol" and v.owner_email == "carol@x.com"  # owner bound, not just named
+    assert client._store.consent_resolve("ws1", vp)["visibility"] == "named"
+
+
+def test_email_binding_unknown_voiceprint_not_found(client):
+    r = _post(client, {"workspace": "ws1",
+                       "bindings": [{"voiceprint_id": "vp_nope", "name": "X", "email": "x@x.com"}]})
+    assert r.json()["bound"] == [] and r.json()["not_found"] == ["vp_nope"]
+
+
+def test_bare_name_binding_stays_legacy_no_owner(client):
+    vp = _anon(client._store)
+    r = _post(client, {"workspace": "ws1", "bindings": [{"voiceprint_id": vp, "name": "Dave"}]})
+    assert r.json()["bound"] == [vp]
+    v = client._store.get("ws1", vp)
+    assert v.name == "Dave" and v.owner_email == ""  # legacy path binds no owner_email
