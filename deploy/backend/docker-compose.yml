@@ -36,6 +36,15 @@ services:
       FPM_DIARIZER_URL: ${FPM_DIARIZER_URL:-}
       FPM_DIARIZE_TOKEN: ${FPM_DIARIZE_TOKEN:-}
 
+      # ── notify email (P4 host-tag → "you've been identified") ──
+      FPM_NOTIFY_EMAIL: ${FPM_NOTIFY_EMAIL:-}
+      FPM_SMTP_HOST: ${FPM_SMTP_HOST:-}
+      FPM_SMTP_PORT: ${FPM_SMTP_PORT:-587}
+      FPM_SMTP_USER: ${FPM_SMTP_USER:-}
+      FPM_SMTP_PASS: ${FPM_SMTP_PASS:-}
+      FPM_NOTIFY_FROM: ${FPM_NOTIFY_FROM:-}
+      FPM_DASHBOARD_URL: ${FPM_DASHBOARD_URL:-}
+
       # ── storage ──
       FPM_DATA_DIR: /app/data
       OMP_NUM_THREADS: "2"
