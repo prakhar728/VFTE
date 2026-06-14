@@ -64,6 +64,7 @@ def test_dashboard_served(client):
     c, _ = client
     r = c.get("/dashboard")
     assert r.status_code == 200 and "Your voiceprint" in r.text
+    assert "People who tagged you" in r.text  # P4 pending-inbox section present
 
 
 def test_voiceprints_require_auth(client):
