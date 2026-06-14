@@ -120,3 +120,41 @@ def test_dev_login_sets_session(client):
     assert r.status_code in (302, 307)
     me = c.get("/v1/me").json()
     assert me["signed_in"] and me["email"] == "alice@x.com"     # lowercased
+
+
+# ── P4: confirm / deny a pending binding (session-authed) ────
+
+def test_confirm_proposal_via_session(client):
+    c, store = client
+    store.upsert(_vp("ws1", "vp_anon1", "", "", 9))            # anonymous voiceprint
+    p = store.propose("ws1", "vp_anon1", "carol@x.com", "host@x.com", "Carol")
+    _login(c, "carol@x.com")
+    r = c.post("/v1/confirm", json={"proposal_id": p["proposal_id"]})
+    assert r.status_code == 200
+    assert r.json()["status"] == "confirmed" and r.json()["name"] == "Carol"
+    vp = store.get("ws1", "vp_anon1")
+    assert vp.owner_email == "carol@x.com" and vp.name == "Carol"
+
+
+def test_confirm_requires_auth(client):
+    c, store = client
+    store.upsert(_vp("ws1", "vp_anon2", "", "", 8))
+    p = store.propose("ws1", "vp_anon2", "carol@x.com", "host@x.com", "Carol")
+    assert c.post("/v1/confirm", json={"proposal_id": p["proposal_id"]}).status_code == 401
+
+
+def test_deny_leaves_speaker_unbound(client):
+    c, store = client
+    store.upsert(_vp("ws1", "vp_anon3", "", "", 7))
+    p = store.propose("ws1", "vp_anon3", "carol@x.com", "host@x.com", "Carol")
+    _login(c, "carol@x.com")
+    r = c.post("/v1/deny", json={"proposal_id": p["proposal_id"]})
+    assert r.status_code == 200 and r.json()["status"] == "denied"
+    vp = store.get("ws1", "vp_anon3")
+    assert vp.owner_email == "" and vp.name == ""
+
+
+def test_confirm_unknown_proposal_404(client):
+    c, _ = client
+    _login(c, "carol@x.com")
+    assert c.post("/v1/confirm", json={"proposal_id": "prop_nope"}).status_code == 404

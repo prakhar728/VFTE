@@ -91,3 +91,8 @@ SESSION_TTL_SEC = int(os.environ.get("FPM_SESSION_TTL_SEC", str(7 * 24 * 3600)))
 # Dev convenience: when set (and Google creds absent), /auth/dev-login?email= signs you
 # in without Google — for running the demo locally. NEVER enable in production.
 DEV_LOGIN = os.environ.get("FPM_DEV_LOGIN", "").lower() in ("1", "true", "yes")
+# P4 dev flag: collapse propose→confirm with no email/no pending so the binding→
+# re-resolve→projection spine can be exercised before email/permissions exist
+# (Phase 1). Rides the real propose→confirm path. Default OFF; Phase 2 flips it off
+# permanently and the only auto-confirm left is the specced self-tag. NEVER on in prod.
+CONSENT_AUTOCONFIRM = os.environ.get("FPM_CONSENT_AUTOCONFIRM", "").lower() in ("1", "true", "yes")

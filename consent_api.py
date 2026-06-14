@@ -175,3 +175,35 @@ def forget_me(
     deleted = store.delete(workspace_id, voiceprint_id, actor=email)
     # TODO(deletion cascade, decision F): emit a deletion event Conclave can subscribe to.
     return {"voiceprint_id": voiceprint_id, "deleted": deleted}
+
+
+# ── P4 trust handshake: confirm / deny a pending email binding (WS2) ──
+# Session-authed (the data subject signed into this dashboard) — these are the human
+# side of the handshake; propose + consent-query stay M2M on /v1. Phase 1 lets any
+# valid session confirm (single-actor spine); Phase 2 enforces target-only authz.
+
+class ProposalAction(BaseModel):
+    proposal_id: str
+
+
+@router.post("/v1/confirm")
+def confirm_proposal_endpoint(
+    request: Request, body: ProposalAction, email: str = Depends(require_user),
+) -> dict:
+    """Confirm a pending binding → bind owner_email + name (reuses the audited store path)."""
+    binding = request.app.state.store.confirm_proposal(body.proposal_id, actor=email)
+    if binding is None:
+        raise HTTPException(404, "proposal not found")
+    return {"proposal_id": body.proposal_id, "status": "confirmed", **binding}
+
+
+@router.post("/v1/deny")
+def deny_proposal_endpoint(
+    request: Request, body: ProposalAction, email: str = Depends(require_user),
+) -> dict:
+    """Deny a pending binding → no name attaches (the speaker stays `Speaker N`)."""
+    res = request.app.state.store.deny_proposal(body.proposal_id, actor=email)
+    if res is None:
+        raise HTTPException(404, "proposal not found")
+    return {"proposal_id": body.proposal_id, "status": "denied",
+            "voiceprint_id": res["voiceprint_id"]}

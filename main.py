@@ -318,6 +318,82 @@ async def knowledge_endpoint(
     return {"bound": bound, "not_found": not_found, "vocab_terms": len(body.vocab_terms)}
 
 
+class ProposeRequest(BaseModel):
+    workspace: str
+    voiceprint_id: str
+    proposed_email: str
+    proposed_by: str
+    proposed_name: str = ""
+
+
+@app.post("/v1/propose", dependencies=[Depends(enforce_write_limit)])
+async def propose_endpoint(
+    request: Request,
+    body: ProposeRequest,
+    caller: Caller = Depends(require_scope("knowledge")),
+) -> dict:
+    """P4 write side (C4): host tags a voiceprint (name+email) → pending email binding.
+
+    Idempotent per (workspace, voiceprint, email). Auto-confirms when the tag is a
+    self-identification (`proposed_by == proposed_email`) OR the `CONSENT_AUTOCONFIRM`
+    dev flag is on — running the shared confirm path (claim_owner + set_name, audited).
+    Otherwise the proposal stays pending until the target confirms on the dashboard
+    (Phase 2 fires the notify email here).
+    """
+    if not caller.allows_workspace(body.workspace):
+        raise HTTPException(403, f"caller '{caller.name}' not authorized for workspace '{body.workspace}'")
+    store = request.app.state.store
+    if store.get(body.workspace, body.voiceprint_id) is None:
+        raise HTTPException(404, f"voiceprint '{body.voiceprint_id}' not found in workspace '{body.workspace}'")
+    p = store.propose(body.workspace, body.voiceprint_id, body.proposed_email,
+                      body.proposed_by, body.proposed_name)
+    self_tag = body.proposed_by.strip().lower() == body.proposed_email.strip().lower()
+    if p["status"] == "confirmed" or self_tag or config.CONSENT_AUTOCONFIRM:
+        binding = store.confirm_proposal(p["proposal_id"], actor=p["proposed_email"])
+        return {"proposal_id": p["proposal_id"], "status": "confirmed", "auto_confirmed": True,
+                "voiceprint_id": binding["voiceprint_id"], "name": binding["name"],
+                "owner_email": binding["owner_email"]}
+    return {"proposal_id": p["proposal_id"], "status": p["status"], "auto_confirmed": False,
+            "voiceprint_id": body.voiceprint_id, "name": None, "owner_email": None}
+
+
+@app.get("/v1/consent/resolve/{workspace}/{voiceprint_id}")
+async def consent_resolve_endpoint(
+    request: Request,
+    workspace: str,
+    voiceprint_id: str,
+    caller: Caller = Depends(require_scope("knowledge")),
+) -> dict:
+    """P4 read side (C4): the projection keystone Conclave queries at display time.
+
+    Returns `{voiceprint_id, name, owner_email, visibility}`; `name` is null whenever
+    `identify_allowed=False` or the voiceprint is unbound/unnamed (the read-side consent
+    gate, mirroring /v1/identify).
+    """
+    if not caller.allows_workspace(workspace):
+        raise HTTPException(403, f"caller '{caller.name}' not authorized for workspace '{workspace}'")
+    r = request.app.state.store.consent_resolve(workspace, voiceprint_id)
+    return {"voiceprint_id": voiceprint_id, **r}
+
+
+class ConsentResolveBatch(BaseModel):
+    voiceprint_ids: list[str] = Field(default_factory=list)
+
+
+@app.post("/v1/consent/resolve/{workspace}")
+async def consent_resolve_batch_endpoint(
+    request: Request,
+    workspace: str,
+    body: ConsentResolveBatch,
+    caller: Caller = Depends(require_scope("knowledge")),
+) -> dict:
+    """Batch form of the consent-query (one transcript's worth of voiceprints at a time)."""
+    if not caller.allows_workspace(workspace):
+        raise HTTPException(403, f"caller '{caller.name}' not authorized for workspace '{workspace}'")
+    store = request.app.state.store
+    return {"resolved": {vid: store.consent_resolve(workspace, vid) for vid in body.voiceprint_ids}}
+
+
 @app.get("/v1/vocab/{workspace}")
 async def vocab_endpoint(
     request: Request,
