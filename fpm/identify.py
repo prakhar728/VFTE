@@ -99,7 +99,13 @@ class SessionIdentifier:
         self._exemplars: dict[str, list[np.ndarray]] = {}
         self._locked: dict[str, IdentifiedSegment] = {}  # local_speaker → resolved label
         self._history: list[IdentifiedSegment] = []      # running session transcript
-        self._max_buf = int(BUFFER_SEC * self._sr)
+        # A↔C bridge: incremental engines (diart/mock) emit segments while their audio is
+        # still in a bounded trailing window. Batch engines (DiariZen) emit ALL segments at
+        # finish(), so we must retain the whole clip to re-embed early ones. The hint is
+        # read via getattr — set by the engine on its own class (A owns it); absent → bounded.
+        # Memory for the unbounded case is bounded by the engine's own clip-length cap.
+        self._max_buf = None if getattr(self._diarizer, "buffered_batch", False) \
+            else int(BUFFER_SEC * self._sr)
         self._finished = False
         self._sealed = False
 
@@ -137,7 +143,8 @@ class SessionIdentifier:
     def _append(self, block: np.ndarray) -> None:
         if block.size:
             self._buf = np.concatenate([self._buf, block])
-        if self._buf.size > self._max_buf:                  # drop the stale front
+        # max_buf is None for batch engines → retain the whole clip (no trimming).
+        if self._max_buf is not None and self._buf.size > self._max_buf:  # drop the stale front
             drop = self._buf.size - self._max_buf
             self._buf = self._buf[drop:]
             self._buf_start += drop
