@@ -32,6 +32,15 @@ export type Me = {
   dev_login: boolean;
 };
 
+export type Proposal = {
+  proposal_id: string;
+  workspace_id: string;
+  voiceprint_id: string;
+  proposed_by: string;
+  proposed_name: string;
+  created_at: string;
+};
+
 export class ApiError extends Error {
   readonly status: number;
   constructor(status: number, message: string) {
@@ -79,6 +88,13 @@ export const api = {
     postJSON<{ deleted: boolean }>(
       `/v1/me/voiceprints/${encodeURIComponent(workspaceId)}/${encodeURIComponent(voiceprintId)}/forget`,
     ),
+
+  // P4 consent inbox: proposals where someone tagged this user's voice.
+  pending: () => getJSON<{ email: string; pending: Proposal[] }>("/v1/me/pending"),
+  confirm: (proposalId: string) =>
+    postJSON<{ status: string }>("/v1/confirm", { proposal_id: proposalId }),
+  deny: (proposalId: string) =>
+    postJSON<{ status: string }>("/v1/deny", { proposal_id: proposalId }),
 
   logout: () => postJSON<{ ok: boolean }>("/auth/logout"),
 };

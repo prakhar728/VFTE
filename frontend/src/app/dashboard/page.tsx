@@ -7,6 +7,7 @@ import { LogOut, ShieldCheck } from "lucide-react";
 import { api, type Voiceprint } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { VoiceprintCard } from "@/components/voiceprint-card";
+import { PendingInbox } from "@/components/pending-inbox";
 
 export default function DashboardPage() {
   const router = useRouter();
@@ -52,6 +53,9 @@ export default function DashboardPage() {
           </Button>
         </div>
       </header>
+
+      {/* P4 consent inbox — pending tags awaiting confirm/deny (hidden when none) */}
+      <PendingInbox onResolved={load} />
 
       <div className="mt-8">
         <h1 className="text-2xl font-semibold tracking-tight">
