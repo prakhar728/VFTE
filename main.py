@@ -63,6 +63,14 @@ def _default_diarizer_factory():
             from fpm.diarize.diarizen_engine import DiariZenDiarizer
 
             return DiariZenDiarizer()
+        if engine == "remote":
+            # Torch-free: forwards audio to the standalone diarize service and does
+            # CAM++ identity locally. Needs DIARIZER_REMOTE_URL/TOKEN configured.
+            from fpm.diarize.remote_engine import RemoteDiariZenDiarizer
+
+            if not config.DIARIZER_REMOTE_URL:
+                raise HTTPException(503, "remote diarizer selected but DIARIZER_REMOTE_URL unset")
+            return RemoteDiariZenDiarizer()
     except ImportError as exc:
         raise HTTPException(503, f"diarizer engine '{engine}' not installed: {exc}")
     raise HTTPException(503, f"diarizer engine '{engine}' not available")
@@ -133,6 +141,16 @@ async def _validation_error(request: Request, exc: RequestValidationError) -> JS
 @app.get("/health")
 def health() -> dict:
     return {"status": "ok", "service": config.SERVICE_NAME, "version": config.SERVICE_VERSION}
+
+
+@app.get("/attestation")
+def attestation(nonce: str = "") -> dict:
+    """TDX attestation quote so clients can verify they're talking to the real
+    enclave before trusting it. `nonce` is bound into the quote's report_data to
+    prove freshness. Outside a TEE this returns a tagged stub (in_tee=false)."""
+    from fpm.enclave import IN_TEE, get_attestation_quote
+
+    return {"in_tee": IN_TEE, "nonce": nonce, "quote": get_attestation_quote(nonce)}
 
 
 @app.post("/v1/enroll", dependencies=[Depends(enforce_write_limit)])

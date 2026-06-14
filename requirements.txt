@@ -16,3 +16,8 @@ cryptography>=42.0
 
 # .env loading (config.py) — local secrets like the Google OAuth client
 python-dotenv>=1.0
+
+# remote diarizer engine (FPM_DIARIZER=remote): POSTs audio to the diarize service.
+httpx>=0.27
+# Phala TEE: sealed key derivation + attestation quotes (fpm/enclave.py). No-op off-TEE.
+dstack-sdk>=0.5.2

@@ -81,7 +81,22 @@ def is_encrypted(data: bytes) -> bool:
 
 
 def get_or_create_key() -> bytes:
-    """Master key from `FPM_DB_KEY` (hex/base64, 32 bytes), else a 0600 dev keyfile."""
+    """Master key, in priority order:
+
+    1. **Sealed key from the TEE** (`IN_TEE=true`): derived from the CVM's
+       hardware-bound root key via the dstack agent — bound to this enclave,
+       never on disk, unreadable by the operator. This is the production path.
+    2. **`FPM_DB_KEY`** env (hex/base64, 32 bytes): explicit override / non-TEE.
+    3. **0600 dev keyfile** under DATA_DIR: local dev / fallback.
+    """
+    from fpm.enclave import get_sealed_key
+
+    sealed = get_sealed_key()
+    if sealed is not None:
+        if len(sealed) != _KEY_LEN:  # enclave returns sha256 → always 32, but be safe
+            raise ValueError("sealed key must be 32 bytes")
+        return sealed
+
     env = os.environ.get("FPM_DB_KEY")
     if env:
         key = bytes.fromhex(env) if len(env) == 64 else base64.b64decode(env)
