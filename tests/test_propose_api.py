@@ -124,6 +124,42 @@ def test_propose_missing_token_401(client):
     assert r.status_code == 401
 
 
+# ── notify fires once for a pending tag, never for a self-tag ─
+
+def test_pending_fires_notify_once(client):
+    c, store, monkeypatch = client
+    import notify
+    calls = []
+    monkeypatch.setattr(notify, "notify_identification", lambda *a, **k: calls.append(a) or False)
+    vid = _vp(store)
+    _propose(c, {"workspace": "ws1", "voiceprint_id": vid, "proposed_email": "alice@x.com",
+                 "proposed_by": "host@x.com", "proposed_name": "Alice"})
+    assert len(calls) == 1 and calls[0][0] == "alice@x.com"  # proposed_email is the first arg
+
+
+def test_self_tag_does_not_notify(client):
+    c, store, monkeypatch = client
+    import notify
+    calls = []
+    monkeypatch.setattr(notify, "notify_identification", lambda *a, **k: calls.append(a) or False)
+    vid = _vp(store)
+    _propose(c, {"workspace": "ws1", "voiceprint_id": vid, "proposed_email": "alice@x.com",
+                 "proposed_by": "alice@x.com", "proposed_name": "Alice"})  # self-tag → autoconfirm
+    assert calls == []
+
+
+def test_flag_autoconfirm_does_not_notify(client):
+    c, store, monkeypatch = client
+    monkeypatch.setattr(config, "CONSENT_AUTOCONFIRM", True)
+    import notify
+    calls = []
+    monkeypatch.setattr(notify, "notify_identification", lambda *a, **k: calls.append(a) or False)
+    vid = _vp(store)
+    _propose(c, {"workspace": "ws1", "voiceprint_id": vid, "proposed_email": "alice@x.com",
+                 "proposed_by": "host@x.com", "proposed_name": "Alice"})
+    assert calls == []
+
+
 # ── consent-resolve (read-side gate) ─────────────────────────
 
 def test_consent_resolve_get_named(client):

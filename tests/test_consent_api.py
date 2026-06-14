@@ -181,3 +181,22 @@ def test_deny_by_non_target_403(client):
     r = c.post("/v1/deny", json={"proposal_id": p["proposal_id"]})
     assert r.status_code == 403
     assert store.get_proposal(p["proposal_id"])["status"] == "pending"  # untouched
+
+
+# ── P2: the signed-in user's pending-identifications inbox ────
+
+def test_my_pending_lists_only_my_pending(client):
+    c, store = client
+    store.upsert(_vp("ws1", "vp_p1", "", "", 4))
+    store.upsert(_vp("ws1", "vp_p2", "", "", 3))
+    store.propose("ws1", "vp_p1", "carol@x.com", "host@x.com", "Carol")     # pending
+    p2 = store.propose("ws1", "vp_p2", "carol@x.com", "host@x.com", "Carol")
+    store.confirm_proposal(p2["proposal_id"], actor="carol@x.com")          # confirmed → not pending
+    _login(c, "carol@x.com")
+    data = c.get("/v1/me/pending").json()
+    assert {p["voiceprint_id"] for p in data["pending"]} == {"vp_p1"}
+
+
+def test_my_pending_requires_auth(client):
+    c, _ = client
+    assert c.get("/v1/me/pending").status_code == 401

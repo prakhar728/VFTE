@@ -182,6 +182,12 @@ def forget_me(
 # side of the handshake; propose + consent-query stay M2M on /v1. Only the tagged
 # target may act: the binding is consent, so a third party can't confirm it for you.
 
+@router.get("/v1/me/pending")
+def my_pending(request: Request, email: str = Depends(require_user)) -> dict:
+    """The signed-in user's pending-identifications inbox (proposals tagged to their email)."""
+    return {"email": email, "pending": request.app.state.store.list_pending_for_email(email)}
+
+
 class ProposalAction(BaseModel):
     proposal_id: str
 

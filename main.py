@@ -22,6 +22,7 @@ from pydantic import BaseModel, Field
 
 import config
 import consent_api
+import notify
 from auth import Caller, GoogleOAuth, SessionManager, TokenAuth, _extract_token, require_scope
 from fpm.audio import AudioDecodeError, decode_to_mono
 from fpm.embed.onnx_embedder import OnnxSpeakerEmbedder
@@ -367,6 +368,10 @@ async def propose_endpoint(
         return {"proposal_id": p["proposal_id"], "status": "confirmed", "auto_confirmed": True,
                 "voiceprint_id": binding["voiceprint_id"], "name": binding["name"],
                 "owner_email": binding["owner_email"]}
+    # pending: notify the tagged target so they can confirm/deny on the dashboard
+    # (FPM-routed, flag-guarded — log-only when FPM_NOTIFY_EMAIL is off).
+    notify.notify_identification(body.proposed_email, body.workspace, body.proposed_by,
+                                 p["proposal_id"])
     return {"proposal_id": p["proposal_id"], "status": p["status"], "auto_confirmed": False,
             "voiceprint_id": body.voiceprint_id, "name": None, "owner_email": None}
 

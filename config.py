@@ -96,3 +96,7 @@ DEV_LOGIN = os.environ.get("FPM_DEV_LOGIN", "").lower() in ("1", "true", "yes")
 # (Phase 1). Rides the real propose→confirm path. Default OFF; Phase 2 flips it off
 # permanently and the only auto-confirm left is the specced self-tag. NEVER on in prod.
 CONSENT_AUTOCONFIRM = os.environ.get("FPM_CONSENT_AUTOCONFIRM", "").lower() in ("1", "true", "yes")
+# P4 Phase 2: FPM-routed notify email on a pending host-tag (decision §10). Off → log only
+# (safe for dev/tests; no provider needed). The mail is notify-only ("you've been identified
+# in workspace X — sign in to confirm") — transcript content never leaves the enclave.
+NOTIFY_EMAIL = os.environ.get("FPM_NOTIFY_EMAIL", "").lower() in ("1", "true", "yes")
