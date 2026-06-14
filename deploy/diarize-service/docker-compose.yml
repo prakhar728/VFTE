@@ -1,0 +1,22 @@
+# DiariZen diarization service — Phala CVM deployment.
+#
+# Sized for tdx.large (4 vCPU / 8 GB). DiariZen RAM scales super-linearly with clip
+# length (4.9 GB @30s → 11 GB @14min), so FPM_DIARIZEN_MAX_CLIP_SEC caps clips to
+# stay under 8 GB on this box — the service returns 413 above the cap. Raise the cap
+# only on a bigger box or a GPU CVM (80 GB VRAM erases the wall).
+#
+# Deploy:  phala deploy -c deploy/diarize-service/docker-compose.yml -n fpm-diarize
+services:
+  diarize:
+    image: ${IMAGE:-prakharojha/fpm-diarize:latest}
+    ports:
+      - "8086:8086"
+    restart: always
+    environment:
+      # Bearer token the service requires (also set as FPM_DIARIZE_TOKEN in FPM core).
+      FPM_DIARIZE_TOKEN: ${FPM_DIARIZE_TOKEN:-}
+      # ~6 min ceiling fits comfortably under 8 GB on tdx.large. Tune to your box.
+      FPM_DIARIZEN_MAX_CLIP_SEC: ${FPM_DIARIZEN_MAX_CLIP_SEC:-360}
+      OMP_NUM_THREADS: "4"
+      MKL_NUM_THREADS: "4"
+      TOKENIZERS_PARALLELISM: "false"

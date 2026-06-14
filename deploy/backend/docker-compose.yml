@@ -1,0 +1,52 @@
+# FPM backend (consent plane core) — Phala dstack CVM.
+#
+# The confidential, always-on box: owns the encrypted voiceprint store, CAM++
+# identity, consent flags + ledger, Google sign-in, and the dashboard API. Sits
+# on its OWN CVM (separate from the stateless diarize service). Voiceprints are
+# sealed: with IN_TEE=true the master key is derived from the dstack agent
+# (fpm/enclave.py) — never on disk, unreadable by the operator.
+#
+# Deploy:  phala deploy -c deploy/backend/docker-compose.yml -n fpm-backend \
+#            -t tdx.large -e deploy/backend/.env.sealed
+services:
+  fpm:
+    image: ${IMAGE:-prakharojha/fpm-backend:latest}
+    ports:
+      - "8085:8085"
+    restart: always
+    environment:
+      # ── TEE sealing + attestation (fpm/enclave.py) ──
+      IN_TEE: "true"
+      DSTACK_AGENT_URL: ${DSTACK_AGENT_URL:-}
+      # FPM_DB_KEY intentionally UNSET in TEE — the key is derived from dstack.
+      # Set it only for a non-TEE deploy (then it must be a sealed/encrypted env).
+
+      # ── end-user sign-in (sealed secrets — pass via --env-file, encrypted) ──
+      FPM_GOOGLE_CLIENT_ID: ${FPM_GOOGLE_CLIENT_ID:-}
+      FPM_GOOGLE_CLIENT_SECRET: ${FPM_GOOGLE_CLIENT_SECRET:-}
+      FPM_OAUTH_REDIRECT_URI: ${FPM_OAUTH_REDIRECT_URI:-}
+      FPM_SESSION_SECRET: ${FPM_SESSION_SECRET:-}
+      # DEV_LOGIN is a Google-free auth bypass — MUST stay off in prod (unset).
+
+      # ── M2M callers (Recato / Conclave) — JSON token map ──
+      FPM_AUTH_TOKENS: ${FPM_AUTH_TOKENS:-}
+
+      # ── remote diarizer (the separate diarize CVM) ──
+      FPM_DIARIZER: "remote"
+      FPM_DIARIZER_URL: ${FPM_DIARIZER_URL:-}
+      FPM_DIARIZE_TOKEN: ${FPM_DIARIZE_TOKEN:-}
+
+      # ── storage ──
+      FPM_DATA_DIR: /app/data
+      OMP_NUM_THREADS: "2"
+      MKL_NUM_THREADS: "2"
+      TOKENIZERS_PARALLELISM: "false"
+    volumes:
+      # Persist the encrypted store across restarts. On dstack the disk is
+      # encrypted by default; the sealed key means blobs are unreadable even so.
+      - fpm-data:/app/data
+      # dstack agent socket — required for sealed-key derivation + attestation.
+      - /var/run/dstack.sock:/var/run/dstack.sock
+
+volumes:
+  fpm-data:
