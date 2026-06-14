@@ -39,6 +39,8 @@ from dataclasses import dataclass
 
 import numpy as np
 
+import config  # module-attr access so MIN_SEGMENT_SEC is monkeypatch-tunable in tests
+
 from .diarize.base import Segment, StreamingDiarizer
 from .match import classify
 from .store.models import Voiceprint
@@ -73,6 +75,7 @@ class SessionIdentifier:
         sample_rate: int = 16_000,
         lock_min_votes: int = LOCK_MIN_VOTES,
         consumer: str = "offline",
+        read_only: bool = False,
     ):
         self._store = store
         self._embedder = embedder
@@ -81,6 +84,10 @@ class SessionIdentifier:
         self._sr = sample_rate
         self._lock_min = lock_min_votes
         self._consumer = consumer
+        # P1: live (diart) path — classify + vote-lock in memory for stable session
+        # labels, but mint nothing and write nothing to the store (single-writer: the
+        # post pass is the sole authoritative writer). Default False = offline writer.
+        self._read_only = read_only
 
     # ── lifecycle ────────────────────────────────────────────
 
@@ -92,7 +99,13 @@ class SessionIdentifier:
         self._exemplars: dict[str, list[np.ndarray]] = {}
         self._locked: dict[str, IdentifiedSegment] = {}  # local_speaker → resolved label
         self._history: list[IdentifiedSegment] = []      # running session transcript
-        self._max_buf = int(BUFFER_SEC * self._sr)
+        # A↔C bridge: incremental engines (diart/mock) emit segments while their audio is
+        # still in a bounded trailing window. Batch engines (DiariZen) emit ALL segments at
+        # finish(), so we must retain the whole clip to re-embed early ones. The hint is
+        # read via getattr — set by the engine on its own class (A owns it); absent → bounded.
+        # Memory for the unbounded case is bounded by the engine's own clip-length cap.
+        self._max_buf = None if getattr(self._diarizer, "buffered_batch", False) \
+            else int(BUFFER_SEC * self._sr)
         self._finished = False
         self._sealed = False
 
@@ -130,7 +143,8 @@ class SessionIdentifier:
     def _append(self, block: np.ndarray) -> None:
         if block.size:
             self._buf = np.concatenate([self._buf, block])
-        if self._buf.size > self._max_buf:                  # drop the stale front
+        # max_buf is None for batch engines → retain the whole clip (no trimming).
+        if self._max_buf is not None and self._buf.size > self._max_buf:  # drop the stale front
             drop = self._buf.size - self._max_buf
             self._buf = self._buf[drop:]
             self._buf_start += drop
@@ -159,13 +173,16 @@ class SessionIdentifier:
         if emb is None:                                     # too short to ID yet
             return IdentifiedSegment(seg.start, seg.end, spk, None, None, "PENDING", 0.0)
 
-        self._exemplars.setdefault(spk, [])
-        if len(self._exemplars[spk]) < 20:
-            self._exemplars[spk].append(emb)
-
         res = classify(emb, self._store.centroids(self._ws))
         votes = self._votes.setdefault(spk, Counter())
-        votes[res.voiceprint_id if res.decision == "MATCH" else _UNKNOWN] += 1
+        votes[res.voiceprint_id if res.decision == "MATCH" else _UNKNOWN] += 1  # vote ALWAYS (ungated)
+
+        # P3 gate: only strong spans contribute an exemplar to a (future) minted centroid.
+        # Voting above is untouched, so weak speakers still vote-lock / MATCH normally.
+        if self._passes_gate(seg, res):
+            self._exemplars.setdefault(spk, [])
+            if len(self._exemplars[spk]) < 20:
+                self._exemplars[spk].append(emb)
 
         locked = self._maybe_lock(spk, res.confidence)
         if locked is not None:
@@ -188,11 +205,22 @@ class SessionIdentifier:
             return None
 
         if cand == _UNKNOWN:
-            vp_id = self._mint_anonymous(spk)
+            if self._read_only:
+                # P1 read-only: mint nothing — lock to a stable session-local label
+                # (voiceprint_id=None), kept stable via local_speaker.
+                vp_id = None
+            elif self._exemplars.get(spk):
+                # P3 gate: mint only with >=1 gate-passing exemplar. A speaker whose every
+                # span was sub-floor has none → don't lock; keep voting (may MATCH later).
+                vp_id = self._mint_anonymous(spk)
+            else:
+                return None
             label = IdentifiedSegment(0, 0, spk, vp_id, None, "ANON", confidence)
         else:
             # WS4 ledger: a known speaker locking in IS a use of their voiceprint.
-            self._store.log_usage(self._ws, cand, "identify", self._consumer, "matched in meeting")
+            # P1 read-only writes nothing — skip the ledger row (still resolve for display).
+            if not self._read_only:
+                self._store.log_usage(self._ws, cand, "identify", self._consumer, "matched in meeting")
             name = self._name_of(cand)
             # WS5: identify_allowed=False ⇒ "stay anonymous" — keep the cluster, drop the name.
             decision = "MATCH" if name is not None else "ANON"
@@ -213,6 +241,20 @@ class SessionIdentifier:
                 h.decision = "RELABELED"
                 n += 1
         return n
+
+    def _passes_gate(self, seg: Segment, res) -> bool:
+        """P3 quality gate for exemplar-append (and, via accumulated exemplars, mint).
+
+        A span must be long enough to embed reliably and not be AMBIGUOUS (top-2 too
+        close → likely overlapped speech, which would pollute a centroid). LOW stays
+        admissible so a genuinely new speaker who scores near an existing centroid can
+        still mint. Reads `config.MIN_SEGMENT_SEC` via module attr so tests can tune it.
+        """
+        if seg.duration < config.MIN_SEGMENT_SEC:
+            return False
+        if res.decision == "AMBIGUOUS":
+            return False
+        return True
 
     def _mint_anonymous(self, spk: str) -> str:
         vp = Voiceprint(new_voiceprint_id(), self._ws, name="")
