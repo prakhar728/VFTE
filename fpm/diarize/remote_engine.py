@@ -18,6 +18,7 @@ Select via:  FPM_DIARIZER=remote  FPM_DIARIZER_URL=https://…  FPM_DIARIZE_TOKE
 from __future__ import annotations
 
 import io
+import json
 import wave
 
 import httpx
@@ -73,17 +74,30 @@ class RemoteDiariZenDiarizer(StreamingDiarizer):
         audio = np.concatenate(self._buf)
         self._buf = []
         wav = self._to_wav_bytes(audio)
-        resp = httpx.post(
+        # The service heartbeats (blank lines) while DiariZen runs, then sends one
+        # final JSON line — so we stream and keep the last non-blank line. The
+        # heartbeats keep the gateway connection alive past its idle timeout.
+        last = ""
+        with httpx.stream(
+            "POST",
             f"{self._url}/diarize",
             headers={"Authorization": f"Bearer {self._token}"},
             files={"file": ("clip.wav", wav, "audio/wav")},
             data={"workspace": self._workspace_id},
             timeout=self._timeout,
-        )
-        resp.raise_for_status()
+        ) as resp:
+            resp.raise_for_status()
+            for line in resp.iter_lines():
+                if line.strip():
+                    last = line
+        if not last:
+            raise RuntimeError("diarize service returned no result")
+        payload = json.loads(last)
+        if payload.get("error"):
+            raise RuntimeError(f"diarize service: {payload.get('detail') or payload['error']}")
         segs = [
             Segment(float(s["start"]), float(s["end"]), str(s["local_speaker"]))
-            for s in resp.json().get("segments", [])
+            for s in payload.get("segments", [])
         ]
         segs.sort(key=lambda s: (s.start, s.local_speaker))
         return segs

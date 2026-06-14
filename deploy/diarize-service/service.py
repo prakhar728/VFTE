@@ -18,12 +18,16 @@ Run:  FPM_DIARIZE_TOKEN=… uvicorn service:app --host 0.0.0.0 --port 8086
 """
 from __future__ import annotations
 
+import asyncio
 import hmac
+import json
 import logging
 import os
+import threading
 import time
 
 from fastapi import Depends, FastAPI, Form, Header, HTTPException, UploadFile
+from fastapi.responses import StreamingResponse
 
 import config
 from fpm.audio import AudioDecodeError, decode_to_mono
@@ -35,6 +39,10 @@ logging.basicConfig(level=logging.INFO)
 app = FastAPI(title="DiariZen diarization service", version="1.0")
 
 _TOKEN = os.environ.get("FPM_DIARIZE_TOKEN", "")
+# Heartbeat cadence while DiariZen runs — keeps the Phala gateway from dropping the
+# connection as idle during the (minutes-long) diarize. Must be < the gateway idle
+# timeout; 8s is comfortably under typical proxy defaults (30–60s).
+_HEARTBEAT_SEC = float(os.environ.get("FPM_DIARIZE_HEARTBEAT_SEC", "8"))
 
 
 def require_token(authorization: str = Header(default="")) -> None:
@@ -48,9 +56,18 @@ def require_token(authorization: str = Header(default="")) -> None:
 
 
 # One diarizer instance reused across requests: the torch model loads lazily on the
-# first finish() and stays warm. DiariZen is single-session, so requests are serial —
-# fine for a batch box; scale out with replicas if you need concurrency.
+# first finish() and stays warm. DiariZen is single-session, so a lock serializes
+# concurrent requests (e.g. a Conclave retry) — without it the shared buffer corrupts.
 _diarizer = DiariZenDiarizer(offline=True)
+_diarize_lock = threading.Lock()
+
+
+def _run_diarize(audio, sr: int, workspace: str):
+    """Blocking diarize, serialized. Runs in a thread off the event loop."""
+    with _diarize_lock:
+        _diarizer.start(workspace or "remote")
+        _diarizer.feed(audio, sr)
+        return _diarizer.finish()
 
 
 @app.get("/health")
@@ -59,12 +76,16 @@ def health() -> dict:
 
 
 @app.post("/diarize", dependencies=[Depends(require_token)])
-async def diarize(file: UploadFile, workspace: str = Form("")) -> dict:
-    """Diarize one mixed recording → anonymous segments.
+async def diarize(file: UploadFile, workspace: str = Form("")):
+    """Diarize one mixed recording → anonymous segments, as a heartbeat stream.
 
-    Returns `{segments: [{start, end, local_speaker}], sample_rate, duration_sec,
-    elapsed_sec}`. `workspace` is accepted for log correlation only — this box keeps
-    no per-workspace state.
+    DiariZen is slow (RTF ~3 on CPU) — minutes for a real clip — which outlives the
+    Phala gateway's idle timeout on a plain request. So we stream: a `\\n` heartbeat
+    every few seconds while DiariZen runs in a worker thread (keeps the gateway
+    connection alive), then a single final JSON line:
+        {segments:[{start,end,local_speaker}], sample_rate, duration_sec, elapsed_sec}
+    or {error, detail} on failure. The client (remote_engine) ignores blank lines
+    and parses the last non-blank line.
     """
     try:
         audio = decode_to_mono(await file.read())
@@ -73,22 +94,31 @@ async def diarize(file: UploadFile, workspace: str = Form("")) -> dict:
     sr = config.TARGET_SAMPLE_RATE
     dur = len(audio) / sr if sr else 0.0
 
-    t0 = time.monotonic()
-    _diarizer.start(workspace or "remote")
-    try:
-        _diarizer.feed(audio, sr)
-        segs = _diarizer.finish()
-    except ClipTooLongError as exc:
-        raise HTTPException(413, str(exc))
-    elapsed = time.monotonic() - t0
-    log.info("diarized ws=%s dur=%.1fs -> %d segs in %.1fs (rtf=%.2f)",
-             workspace or "-", dur, len(segs), elapsed, elapsed / dur if dur else 0.0)
+    async def stream():
+        t0 = time.monotonic()
+        fut = asyncio.get_running_loop().run_in_executor(None, _run_diarize, audio, sr, workspace)
+        while not fut.done():
+            yield b"\n"  # heartbeat — blank line, keeps the connection non-idle
+            await asyncio.sleep(_HEARTBEAT_SEC)
+        try:
+            segs = fut.result()
+        except ClipTooLongError as exc:
+            yield (json.dumps({"error": "clip_too_long", "detail": str(exc)}) + "\n").encode()
+            return
+        except Exception as exc:  # noqa: BLE001 — surface as a JSON error line, not a dropped stream
+            log.exception("diarize failed")
+            yield (json.dumps({"error": "diarize_failed", "detail": str(exc)[:300]}) + "\n").encode()
+            return
+        elapsed = time.monotonic() - t0
+        log.info("diarized ws=%s dur=%.1fs -> %d segs in %.1fs (rtf=%.2f)",
+                 workspace or "-", dur, len(segs), elapsed, elapsed / dur if dur else 0.0)
+        yield (json.dumps({
+            "segments": [
+                {"start": s.start, "end": s.end, "local_speaker": s.local_speaker} for s in segs
+            ],
+            "sample_rate": sr,
+            "duration_sec": round(dur, 3),
+            "elapsed_sec": round(elapsed, 3),
+        }) + "\n").encode()
 
-    return {
-        "segments": [
-            {"start": s.start, "end": s.end, "local_speaker": s.local_speaker} for s in segs
-        ],
-        "sample_rate": sr,
-        "duration_sec": round(dur, 3),
-        "elapsed_sec": round(elapsed, 3),
-    }
+    return StreamingResponse(stream(), media_type="application/x-ndjson")
