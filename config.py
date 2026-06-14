@@ -59,7 +59,9 @@ SCORE_BETA = float(os.environ.get("FPM_SCORE_BETA", "-7.67"))
 ENROLL_QUALITY_MIN = float(os.environ.get("FPM_ENROLL_QUALITY_MIN", "0.50"))  # min self-sim to centroid
 
 # --- diarizer engine (offline path) — diart chosen at the C.2 spike (real-time on CPU) ---
-DIARIZATION_ENGINE = os.environ.get("FPM_DIARIZER", "diart")   # diart | onnx (E.3)
+# Default stays `diart` (the core venv is torch-free; the diarizen post engine runs in its own
+# venv/instance via FPM_DIARIZER=diarizen). See docs/build/branch-A-engine.md D6.
+DIARIZATION_ENGINE = os.environ.get("FPM_DIARIZER", "diart")   # diart | diarizen | onnx (E.3)
 
 # --- write rate limiting (per caller token, fixed window) ---
 RATE_LIMIT_WRITES = int(os.environ.get("FPM_RATE_LIMIT_WRITES", "120"))

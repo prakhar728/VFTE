@@ -47,12 +47,24 @@ _FEED_SEC = 0.5  # chunk size the offline pipeline is fed at
 
 
 def _default_diarizer_factory():
-    """Build the configured streaming diarizer (lazy import keeps core torch-free)."""
-    engine = config.DIARIZATION_ENGINE
-    if engine == "diart":
-        from fpm.diarize.diart_engine import DiartDiarizer
+    """Build the configured streaming diarizer (lazy import keeps core torch-free).
 
-        return DiartDiarizer(offline=True)
+    diart and diarizen pin incompatible torch versions, so each lives in its own venv and its
+    import stays lazy here — only the selected engine's stack loads. A missing engine venv
+    surfaces as a clean 503, not a 500.
+    """
+    engine = config.DIARIZATION_ENGINE
+    try:
+        if engine == "diart":
+            from fpm.diarize.diart_engine import DiartDiarizer
+
+            return DiartDiarizer(offline=True)
+        if engine == "diarizen":
+            from fpm.diarize.diarizen_engine import DiariZenDiarizer
+
+            return DiariZenDiarizer()
+    except ImportError as exc:
+        raise HTTPException(503, f"diarizer engine '{engine}' not installed: {exc}")
     raise HTTPException(503, f"diarizer engine '{engine}' not available")
 
 
