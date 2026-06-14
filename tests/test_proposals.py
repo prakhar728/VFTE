@@ -80,3 +80,62 @@ def test_get_proposal_roundtrip(store):
     got = store.get_proposal(p["proposal_id"])
     assert got == p
     assert store.get_proposal("prop_nope") is None
+
+
+# ── step 2: confirm / deny ───────────────────────────────────
+
+def test_confirm_binds_owner_and_name(store):
+    vid = _anon(store)
+    p = store.propose("ws1", vid, "alice@x.com", "host@x.com", "Alice")
+    res = store.confirm_proposal(p["proposal_id"], actor="alice@x.com")
+    assert res == {"voiceprint_id": vid, "name": "Alice", "owner_email": "alice@x.com"}
+    vp = store.get("ws1", vid)
+    assert vp.owner_email == "alice@x.com" and vp.name == "Alice"
+    got = store.get_proposal(p["proposal_id"])
+    assert got["status"] == "confirmed" and got["confirmed_at"] and got["denied_at"] is None
+
+
+def test_confirm_writes_binding_audit_and_ledger(store):
+    vid = _anon(store)
+    p = store.propose("ws1", vid, "alice@x.com", "host@x.com", "Alice")
+    store.confirm_proposal(p["proposal_id"], actor="alice@x.com")
+    audit = store.audit_entries("ws1")
+    assert ("", "Alice", "alice@x.com") in [(a["old_name"], a["new_name"], a["actor"]) for a in audit]
+    assert any(u["event"] == "name_bind" for u in store.usage_for_voiceprint("ws1", vid))
+
+
+def test_confirm_idempotent_on_confirmed(store):
+    vid = _anon(store)
+    p = store.propose("ws1", vid, "alice@x.com", "host@x.com", "Alice")
+    a = store.confirm_proposal(p["proposal_id"], actor="alice@x.com")
+    b = store.confirm_proposal(p["proposal_id"], actor="alice@x.com")
+    assert a == b
+    # the bind ran exactly once (no second audit row from a re-confirm)
+    name_binds = [u for u in store.usage_for_voiceprint("ws1", vid) if u["event"] == "name_bind"]
+    assert len(name_binds) == 1
+
+
+def test_deny_leaves_no_binding(store):
+    vid = _anon(store)
+    p = store.propose("ws1", vid, "alice@x.com", "host@x.com", "Alice")
+    res = store.deny_proposal(p["proposal_id"], actor="alice@x.com")
+    assert res["status"] == "denied"
+    vp = store.get("ws1", vid)
+    assert vp.owner_email == "" and vp.name == ""
+    got = store.get_proposal(p["proposal_id"])
+    assert got["status"] == "denied" and got["denied_at"] and got["confirmed_at"] is None
+
+
+def test_confirm_and_deny_unknown_return_none(store):
+    assert store.confirm_proposal("prop_nope") is None
+    assert store.deny_proposal("prop_nope") is None
+
+
+def test_list_pending_for_email(store):
+    v1, v2, v3 = _anon(store), _anon(store), _anon(store)
+    store.propose("ws1", v1, "alice@x.com", "host@x.com", "Alice")
+    p2 = store.propose("ws1", v2, "alice@x.com", "host@x.com", "Alice")
+    store.propose("ws1", v3, "bob@x.com", "host@x.com", "Bob")
+    store.confirm_proposal(p2["proposal_id"], actor="alice@x.com")
+    pending = store.list_pending_for_email("ALICE@x.com")
+    assert {p["voiceprint_id"] for p in pending} == {v1}  # v2 confirmed, v3 is bob's

@@ -386,6 +386,63 @@ class VoiceprintStore:
             self._conn.commit()
             return self.get_proposal(pid)
 
+    def confirm_proposal(self, proposal_id: str, actor: str | None = None) -> dict | None:
+        """Confirm a pending proposal → bind owner_email + name.
+
+        Reuses `claim_owner` + `set_name` (both audited → binding_audit + usage_ledger), so
+        a confirmed binding is reversible and traceable like any other name bind. Idempotent
+        on an already-confirmed proposal (the bind runs exactly once). Returns
+        `{voiceprint_id, name, owner_email}`, or None if the proposal is unknown.
+        (Phase 2 adds the consent-bypass guard: identify_allowed=False binds the owner but
+        surfaces no name.)
+        """
+        p = self.get_proposal(proposal_id)
+        if p is None:
+            return None
+        ws, vid, email, name = p["workspace_id"], p["voiceprint_id"], p["proposed_email"], p["proposed_name"]
+        if p["status"] != "confirmed":
+            # claim_owner / set_name each take self._lock — call them OUTSIDE the lock below.
+            self.claim_owner(ws, vid, email)
+            self.set_name(ws, vid, name, actor=actor or email)
+            with self._lock:
+                self._conn.execute(
+                    "UPDATE proposals SET status='confirmed', confirmed_at=? WHERE proposal_id=?",
+                    (_now(), proposal_id),
+                )
+                self._conn.commit()
+        return {"voiceprint_id": vid, "name": name, "owner_email": email}
+
+    def deny_proposal(self, proposal_id: str, actor: str | None = None) -> dict | None:
+        """Deny a proposal → mark denied, no binding (the speaker stays `Speaker N`).
+
+        Idempotent on an already-denied proposal. Returns `{voiceprint_id, status}` or None
+        if unknown. Binding removal for an already-confirmed voiceprint is P5 (redaction),
+        not here — deny only blocks an outstanding proposal.
+        """
+        p = self.get_proposal(proposal_id)
+        if p is None:
+            return None
+        if p["status"] != "denied":
+            with self._lock:
+                self._conn.execute(
+                    "UPDATE proposals SET status='denied', denied_at=? WHERE proposal_id=?",
+                    (_now(), proposal_id),
+                )
+                self._conn.commit()
+        return {"voiceprint_id": p["voiceprint_id"], "status": "denied"}
+
+    def list_pending_for_email(self, proposed_email: str) -> list[dict]:
+        """All still-pending proposals tagged to an email (the consent inbox feed)."""
+        email = proposed_email.lower()
+        return [
+            self._proposal_dict(r)
+            for r in self._conn.execute(
+                f"SELECT {', '.join(_PROPOSAL_COLS)} FROM proposals "
+                "WHERE proposed_email=? AND status='pending' ORDER BY created_at",
+                (email,),
+            )
+        ]
+
     def log_usage(
         self, workspace_id: str, voiceprint_id: str, event: str,
         consumer: str, purpose: str = "",
