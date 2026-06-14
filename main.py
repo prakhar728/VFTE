@@ -369,9 +369,13 @@ async def propose_endpoint(
                 "voiceprint_id": binding["voiceprint_id"], "name": binding["name"],
                 "owner_email": binding["owner_email"]}
     # pending: notify the tagged target so they can confirm/deny on the dashboard
-    # (FPM-routed, flag-guarded — log-only when FPM_NOTIFY_EMAIL is off).
-    notify.notify_identification(body.proposed_email, body.workspace, body.proposed_by,
-                                 p["proposal_id"])
+    # (FPM-routed, flag-guarded — log-only when FPM_NOTIFY_EMAIL is off). Best-effort: a
+    # mail-transport failure must not roll back the (already-created) pending proposal.
+    try:
+        notify.notify_identification(body.proposed_email, body.workspace, body.proposed_by,
+                                     p["proposal_id"])
+    except Exception:  # noqa: BLE001 — surface in logs, keep the proposal
+        log.warning("notify failed for proposal %s (pending stands)", p["proposal_id"], exc_info=True)
     return {"proposal_id": p["proposal_id"], "status": p["status"], "auto_confirmed": False,
             "voiceprint_id": body.voiceprint_id, "name": None, "owner_email": None}
 
