@@ -4,7 +4,7 @@ import { GeistMono } from "geist/font/mono";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "FPM · your voiceprint",
+  title: "VFTE · your voiceprint",
   description:
     "Your voice, your keys. See whether your voiceprint is stored, how it's used, and control it — provably, inside the enclave.",
 };
