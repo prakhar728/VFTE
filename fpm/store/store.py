@@ -51,8 +51,30 @@ CREATE TABLE IF NOT EXISTS usage_ledger(
   id INTEGER PRIMARY KEY AUTOINCREMENT, workspace_id TEXT, voiceprint_id TEXT,
   event TEXT, consumer TEXT, purpose TEXT, ts TEXT);
 CREATE INDEX IF NOT EXISTS idx_ledger_vp ON usage_ledger(workspace_id, voiceprint_id);
+-- P4 trust handshake: pending email-binding proposals. A host tags a voiceprint
+-- (name+email) → a pending proposal; the data subject confirms/denies on the consent
+-- dashboard. owner_email binds only on confirm (via claim_owner+set_name). Idempotent
+-- per (workspace, voiceprint, email) so re-tagging never duplicates.
+CREATE TABLE IF NOT EXISTS proposals(
+  proposal_id    TEXT PRIMARY KEY,
+  workspace_id   TEXT NOT NULL,
+  voiceprint_id  TEXT NOT NULL,
+  proposed_email TEXT NOT NULL,
+  proposed_by    TEXT NOT NULL,
+  proposed_name  TEXT NOT NULL DEFAULT '',
+  status         TEXT NOT NULL DEFAULT 'pending',  -- pending | confirmed | denied
+  created_at TEXT, confirmed_at TEXT, denied_at TEXT);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_proposal_unique
+  ON proposals(workspace_id, voiceprint_id, proposed_email);
+CREATE INDEX IF NOT EXISTS idx_proposal_email ON proposals(proposed_email);
 CREATE TABLE IF NOT EXISTS store_meta(key TEXT PRIMARY KEY, value TEXT);
 """
+
+# Column order for proposal-row reads → dict (the C4 wire shape).
+_PROPOSAL_COLS = (
+    "proposal_id", "workspace_id", "voiceprint_id", "proposed_email", "proposed_by",
+    "proposed_name", "status", "created_at", "confirmed_at", "denied_at",
+)
 
 # Columns added to `voiceprints` after the original A.5 schema shipped; applied via
 # ALTER on open so an existing real DB upgrades in place (CREATE IF NOT EXISTS won't
@@ -70,6 +92,10 @@ def _now() -> str:
 
 def new_voiceprint_id() -> str:
     return "vp_" + uuid.uuid4().hex[:16]
+
+
+def new_proposal_id() -> str:
+    return "prop_" + uuid.uuid4().hex[:16]
 
 
 class VoiceprintStore:
@@ -317,6 +343,48 @@ class VoiceprintStore:
                 (owner_email,),
             )
         ]
+
+    # ── proposals (P4 trust handshake) ───────────────────────
+
+    def _proposal_dict(self, row) -> dict:
+        return dict(zip(_PROPOSAL_COLS, row))
+
+    def get_proposal(self, proposal_id: str) -> dict | None:
+        r = self._conn.execute(
+            f"SELECT {', '.join(_PROPOSAL_COLS)} FROM proposals WHERE proposal_id=?",
+            (proposal_id,),
+        ).fetchone()
+        return self._proposal_dict(r) if r else None
+
+    def propose(
+        self, workspace_id: str, voiceprint_id: str, proposed_email: str,
+        proposed_by: str, proposed_name: str = "",
+    ) -> dict:
+        """Create (or return the existing) pending email-binding proposal.
+
+        Idempotent per (workspace, voiceprint, email): re-tagging the same person on the
+        same voiceprint returns the original proposal unchanged (no duplicate row; the
+        original proposed_name/proposed_by are retained). `owner_email` binds only on
+        confirm (claim_owner+set_name), never here. Emails are stored lowercased.
+        """
+        email = proposed_email.lower()
+        by = proposed_by.lower()
+        with self._lock:
+            existing = self._conn.execute(
+                f"SELECT {', '.join(_PROPOSAL_COLS)} FROM proposals "
+                "WHERE workspace_id=? AND voiceprint_id=? AND proposed_email=?",
+                (workspace_id, voiceprint_id, email),
+            ).fetchone()
+            if existing:
+                return self._proposal_dict(existing)
+            pid = new_proposal_id()
+            self._conn.execute(
+                "INSERT INTO proposals (proposal_id, workspace_id, voiceprint_id, proposed_email,"
+                " proposed_by, proposed_name, status, created_at) VALUES (?,?,?,?,?,?,'pending',?)",
+                (pid, workspace_id, voiceprint_id, email, by, proposed_name, _now()),
+            )
+            self._conn.commit()
+            return self.get_proposal(pid)
 
     def log_usage(
         self, workspace_id: str, voiceprint_id: str, event: str,
