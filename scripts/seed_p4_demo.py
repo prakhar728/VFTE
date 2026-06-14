@@ -22,26 +22,26 @@ from fpm.store.store import VoiceprintStore
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--workspace", default="live-test")
-    ap.add_argument("--voiceprint-id", default="vp_p4demo")
+    ap.add_argument("--voiceprint-id", default="vp_p4demo,vp_p4demo2",
+                    help="comma-separated voiceprint ids to seed (anonymous)")
     a = ap.parse_args()
 
     store = VoiceprintStore().open()  # uses config DB_PATH + key (from FPM_DATA_DIR)
-    # clean slate: drop any prior demo voiceprint + its proposals so the gate re-binds fresh
-    store.delete(a.workspace, a.voiceprint_id, actor="seed")
-    store._conn.execute(
-        "DELETE FROM proposals WHERE workspace_id=? AND voiceprint_id=?",
-        (a.workspace, a.voiceprint_id),
-    )
-    store._conn.commit()
-
-    vp = Voiceprint(a.voiceprint_id, a.workspace, name="")  # anonymous; identify_allowed defaults True
-    e = np.random.default_rng(42).standard_normal(512).astype(np.float32)
-    e /= np.linalg.norm(e)
-    vp.add_exemplar(e)
-    vp.recompute_centroid()
-    store.upsert(vp)
+    rng = np.random.default_rng(42)
+    for i, vid in enumerate(v.strip() for v in a.voiceprint_id.split(",") if v.strip()):
+        # clean slate: drop any prior demo voiceprint + its proposals so the gate re-binds fresh
+        store.delete(a.workspace, vid, actor="seed")
+        store._conn.execute(
+            "DELETE FROM proposals WHERE workspace_id=? AND voiceprint_id=?", (a.workspace, vid))
+        store._conn.commit()
+        vp = Voiceprint(vid, a.workspace, name="")  # anonymous; identify_allowed defaults True
+        e = rng.standard_normal(512).astype(np.float32)
+        e /= np.linalg.norm(e)
+        vp.add_exemplar(e)
+        vp.recompute_centroid()
+        store.upsert(vp)
+        print(f"[fpm-seed] anonymous voiceprint {vid} ready in workspace {a.workspace}")
     store.close()
-    print(f"[fpm-seed] anonymous voiceprint {a.voiceprint_id} ready in workspace {a.workspace}")
 
 
 if __name__ == "__main__":
