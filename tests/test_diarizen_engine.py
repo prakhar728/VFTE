@@ -12,7 +12,7 @@ import numpy as np
 import pytest
 
 from fpm.diarize.base import Segment, StreamingDiarizer
-from fpm.diarize.diarizen_engine import DiariZenDiarizer
+from fpm.diarize.diarizen_engine import ClipTooLongError, DiariZenDiarizer
 
 SR = 16_000
 
@@ -84,3 +84,46 @@ def test_segments_carry_no_identity_type():
     # Sanity on the contract type the engine emits (no embeddings/ids/text).
     s = Segment(0.0, 1.0, "speaker0")
     assert {f for f in s.__dataclass_fields__} == {"start", "end", "local_speaker"}
+
+
+# ── step 4: clip-length cap (RAM guard) ─────────────────────────────
+
+
+def test_cap_rejects_oversized_clip_before_model_load():
+    # DiariZen loads the whole clip in RAM; oversize audio must be rejected in feed() before
+    # any model load — proves the cap is a pre-load guard (D1+D4), testable without diarizen.
+    d = DiariZenDiarizer(max_clip_sec=0.5)
+    d.start("ws1")
+    with pytest.raises(ClipTooLongError):
+        d.feed(_chunk(1.0), SR)          # 1.0 s > 0.5 s cap
+    assert "diarizen" not in sys.modules
+
+
+def test_cap_accumulates_across_feeds():
+    d = DiariZenDiarizer(max_clip_sec=1.0)
+    d.start("ws1")
+    assert d.feed(_chunk(0.5), SR) == []   # 0.5 s — under cap
+    with pytest.raises(ClipTooLongError):
+        d.feed(_chunk(0.6), SR)            # cumulative 1.1 s > 1.0 s cap
+
+
+def test_under_cap_does_not_raise():
+    d = DiariZenDiarizer(max_clip_sec=10.0)
+    d.start("ws1")
+    assert d.feed(_chunk(2.0), SR) == []
+
+
+def test_cap_zero_disables_guard():
+    # 0 / None disables the cap (unbounded) — feeding a long clip must not raise.
+    d = DiariZenDiarizer(max_clip_sec=0)
+    d.start("ws1")
+    assert d.feed(_chunk(30.0), SR) == []
+
+
+def test_cap_defaults_from_config(monkeypatch):
+    import config
+    monkeypatch.setattr(config, "DIARIZEN_MAX_CLIP_SEC", 1.0)
+    d = DiariZenDiarizer()                  # no explicit cap → uses config default
+    d.start("ws1")
+    with pytest.raises(ClipTooLongError):
+        d.feed(_chunk(1.5), SR)

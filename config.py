@@ -62,6 +62,10 @@ ENROLL_QUALITY_MIN = float(os.environ.get("FPM_ENROLL_QUALITY_MIN", "0.50"))  # 
 # Default stays `diart` (the core venv is torch-free; the diarizen post engine runs in its own
 # venv/instance via FPM_DIARIZER=diarizen). See docs/build/branch-A-engine.md D6.
 DIARIZATION_ENGINE = os.environ.get("FPM_DIARIZER", "diart")   # diart | diarizen | onnx (E.3)
+# DiariZen decodes the whole clip in one batch; peak RAM scales with length (~16.6 GB on a ~1 h
+# AMI mix, docs/bakeoff-offline.md). Cap clip length on the no-GPU box — the engine rejects
+# oversized audio in feed() before the model loads. 0 disables the cap.
+DIARIZEN_MAX_CLIP_SEC = float(os.environ.get("FPM_DIARIZEN_MAX_CLIP_SEC", "1800"))
 
 # --- write rate limiting (per caller token, fixed window) ---
 RATE_LIMIT_WRITES = int(os.environ.get("FPM_RATE_LIMIT_WRITES", "120"))

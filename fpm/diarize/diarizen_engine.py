@@ -23,9 +23,14 @@ import wave
 
 import numpy as np
 
+import config
 from fpm.diarize.base import Segment, StreamingDiarizer
 
 DIARIZEN_MODEL = "BUT-FIT/diarizen-wavlm-large-s80-md"
+
+
+class ClipTooLongError(RuntimeError):
+    """Accumulated audio would exceed the engine's clip cap — rejected before the model loads."""
 
 
 class DiariZenDiarizer(StreamingDiarizer):
@@ -41,12 +46,17 @@ class DiariZenDiarizer(StreamingDiarizer):
         model: str = DIARIZEN_MODEL,
         sample_rate: int = 16_000,
         offline: bool = True,
+        max_clip_sec: float | None = None,
     ):
         self._model_name = model
         self._sample_rate = sample_rate
         self._offline = offline
+        # cap defaults from config; 0 (or 0.0) disables the guard (unbounded)
+        cap = config.DIARIZEN_MAX_CLIP_SEC if max_clip_sec is None else max_clip_sec
+        self._max_samples = int(cap * sample_rate) if cap else None
         self._pipeline = None
         self._buf: list[np.ndarray] = []
+        self._n_samples = 0
         self._started = False
 
     # ── model loading (lazy: importing this module / feeding must not require torch) ──
@@ -68,6 +78,7 @@ class DiariZenDiarizer(StreamingDiarizer):
     def start(self, workspace_id: str) -> None:
         self._workspace_id = workspace_id
         self._buf = []
+        self._n_samples = 0
         self._started = True
 
     def feed(self, chunk: np.ndarray, sample_rate: int = 16_000) -> list[Segment]:
@@ -75,7 +86,16 @@ class DiariZenDiarizer(StreamingDiarizer):
             raise RuntimeError("feed() before start()")
         if sample_rate != self._sample_rate:
             raise ValueError(f"expected {self._sample_rate} Hz, got {sample_rate}")
-        self._buf.append(np.asarray(chunk, dtype=np.float32).ravel())
+        block = np.asarray(chunk, dtype=np.float32).ravel()
+        self._n_samples += block.size
+        if self._max_samples is not None and self._n_samples > self._max_samples:
+            # reject before accumulating (and decoding) a clip too large for the box's RAM
+            cap_sec = self._max_samples / self._sample_rate
+            raise ClipTooLongError(
+                f"clip exceeds DIARIZEN_MAX_CLIP_SEC ({cap_sec:.0f}s): "
+                f"{self._n_samples / self._sample_rate:.0f}s and counting"
+            )
+        self._buf.append(block)
         return []  # batch engine — no incremental output
 
     def finish(self) -> list[Segment]:
