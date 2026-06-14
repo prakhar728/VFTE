@@ -26,6 +26,13 @@ models/
 
 # eval corpora (downloaded, not vendored)
 eval_data/
+# eval runs — contain REAL recordings; never publish (esp. on the public repo)
+eval_harness/
+
+# deploy secrets (filled locally; pass to phala via -e)
+deploy/**/.env.sealed
+deploy/**/.deploy.env
+deploy/**/*.log
 
 # OS
 .DS_Store
