@@ -100,3 +100,12 @@ CONSENT_AUTOCONFIRM = os.environ.get("FPM_CONSENT_AUTOCONFIRM", "").lower() in (
 # (safe for dev/tests; no provider needed). The mail is notify-only ("you've been identified
 # in workspace X — sign in to confirm") — transcript content never leaves the enclave.
 NOTIFY_EMAIL = os.environ.get("FPM_NOTIFY_EMAIL", "").lower() in ("1", "true", "yes")
+# SMTP transport for the notify email (used only when NOTIFY_EMAIL is on). For a Gmail
+# demo: host=smtp.gmail.com, port=587, user=<you>@gmail.com, pass=<app password>. The
+# message is notify-only and links to the consent dashboard; no transcript content.
+SMTP_HOST = os.environ.get("FPM_SMTP_HOST", "")
+SMTP_PORT = int(os.environ.get("FPM_SMTP_PORT", "587"))
+SMTP_USER = os.environ.get("FPM_SMTP_USER", "")
+SMTP_PASS = os.environ.get("FPM_SMTP_PASS", "")
+NOTIFY_FROM = os.environ.get("FPM_NOTIFY_FROM", "") or SMTP_USER
+DASHBOARD_URL = os.environ.get("FPM_DASHBOARD_URL", "http://localhost:8091/dashboard")
