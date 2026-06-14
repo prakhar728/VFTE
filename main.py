@@ -227,6 +227,8 @@ async def diarize_endpoint(
     `gmeet`-tagged audio is learn-only and routes to the enroll path (needs identity).
     `offline` audio is diarized + identified live; segments stream as NDJSON, with a
     final `transcript` line carrying the seal-corrected view (retro-relabels applied).
+    `live`-tagged audio is the read-only diart path: identical NDJSON shape, but it
+    mints nothing and writes nothing (the offline/post pass is the sole writer).
     """
     if not caller.allows_workspace(workspace):
         raise HTTPException(403, f"caller '{caller.name}' not authorized for workspace '{workspace}'")
@@ -248,8 +250,11 @@ async def diarize_endpoint(
                 "status": result.status, "reason": result.reason}
 
     diarizer = request.app.state.diarizer_factory()
+    # P1: `live` (diart) is read-only — classify + stable session labels for display,
+    # but mint nothing and write nothing. `offline` is the authoritative writer (post
+    # pass). The streamed C2 segment shape is identical either way.
     ident = SessionIdentifier(request.app.state.store, embedder, diarizer, workspace,
-                              sample_rate=sr, consumer=caller.name)
+                              sample_rate=sr, consumer=caller.name, read_only=(tag == "live"))
     step = int(_FEED_SEC * sr)
 
     def stream():
