@@ -28,6 +28,15 @@ def _anon(store, ws="ws1", name=""):
     return vp.voiceprint_id
 
 
+def _named(store, ws, name, email, identify_allowed=True):
+    vp = Voiceprint(new_voiceprint_id(), ws, name=name, owner_email=email,
+                    identify_allowed=identify_allowed)
+    vp.add_exemplar(np.ones(512, dtype=np.float32) / np.sqrt(512))
+    vp.recompute_centroid()
+    store.upsert(vp)
+    return vp.voiceprint_id
+
+
 # ── step 1: idempotent propose ───────────────────────────────
 
 def test_propose_creates_pending(store):
@@ -139,3 +148,29 @@ def test_list_pending_for_email(store):
     store.confirm_proposal(p2["proposal_id"], actor="alice@x.com")
     pending = store.list_pending_for_email("ALICE@x.com")
     assert {p["voiceprint_id"] for p in pending} == {v1}  # v2 confirmed, v3 is bob's
+
+
+# ── step 3: consent_resolve (read-side gate) ─────────────────
+
+def test_resolve_named(store):
+    vid = _named(store, "ws1", "Alice", "alice@x.com")
+    assert store.consent_resolve("ws1", vid) == {
+        "name": "Alice", "owner_email": "alice@x.com", "visibility": "named"}
+
+
+def test_resolve_anonymous_when_identify_blocked(store):
+    vid = _named(store, "ws1", "Alice", "alice@x.com", identify_allowed=False)
+    r = store.consent_resolve("ws1", vid)
+    assert r["name"] is None and r["visibility"] == "anonymous"
+    assert r["owner_email"] == "alice@x.com"  # owner still bound; only the name is withheld
+
+
+def test_resolve_unbound_name_null(store):
+    vid = _anon(store)  # exists, no name, no owner
+    assert store.consent_resolve("ws1", vid) == {
+        "name": None, "owner_email": None, "visibility": "anonymous"}
+
+
+def test_resolve_unknown_vid(store):
+    assert store.consent_resolve("ws1", "vp_nope") == {
+        "name": None, "owner_email": None, "visibility": "unknown"}

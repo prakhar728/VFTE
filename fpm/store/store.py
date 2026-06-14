@@ -431,6 +431,21 @@ class VoiceprintStore:
                 self._conn.commit()
         return {"voiceprint_id": p["voiceprint_id"], "status": "denied"}
 
+    def consent_resolve(self, workspace_id: str, voiceprint_id: str) -> dict:
+        """Read-side consent projection: `{name, owner_email, visibility}`.
+
+        The single gate Conclave trusts at projection time. `name` is None whenever the
+        voiceprint is unknown, has `identify_allowed=False` (mirrors the /v1/identify gate),
+        or carries no name. visibility ∈ {named, anonymous, unknown}.
+        """
+        vp = self.get(workspace_id, voiceprint_id)
+        if vp is None:
+            return {"name": None, "owner_email": None, "visibility": "unknown"}
+        owner = vp.owner_email or None
+        if not vp.identify_allowed or not vp.name:
+            return {"name": None, "owner_email": owner, "visibility": "anonymous"}
+        return {"name": vp.name, "owner_email": owner, "visibility": "named"}
+
     def list_pending_for_email(self, proposed_email: str) -> list[dict]:
         """All still-pending proposals tagged to an email (the consent inbox feed)."""
         email = proposed_email.lower()
