@@ -32,6 +32,10 @@ from fpm.match import classify
 from fpm.store.store import VoiceprintStore
 from ratelimit import RateLimiter
 
+# Surface app INFO logs under uvicorn (root otherwise defaults to WARNING, which
+# hides notify._send's "notify sent: …" line and makes mail debugging opaque).
+logging.basicConfig(level=logging.INFO)
+
 log = logging.getLogger(__name__)
 
 
