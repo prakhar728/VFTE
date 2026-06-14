@@ -1,0 +1,62 @@
+# DiariZen diarizer plug (offline POST path) — OPTIONAL, heavy (torch 2.1.1).
+# The accuracy-winner engine (batch WavLM + VBx, ~22.8% DER; docs/bakeoff-offline.md).
+#
+# Kept OUT of the core requirements so the default service venv stays torch-free; install only
+# for the diarizen engine (config.FPM_DIARIZER=diarizen). DiariZen pins torch 2.1.1, which is
+# INCOMPATIBLE with diart's 2.2.2 — install into a SEPARATE venv, never alongside diart:
+#
+#   python3.11 -m venv .venv-diarizen
+#   .venv-diarizen/bin/pip install -r requirements-diarizen.txt
+#   # then the editable DiariZen package + its vendored pyannote-audio fork (not on PyPI):
+#   git clone https://github.com/BUTSpeechFIT/DiariZen /tmp/DiariZen && cd /tmp/DiariZen
+#   .venv-diarizen/bin/pip install -e ./pyannote-audio --no-deps   # the vendored fork
+#   .venv-diarizen/bin/pip install -e .          --no-deps          # diarizen itself
+#   # a transitive dep may bump numpy to 2.x — re-pin afterward:
+#   .venv-diarizen/bin/pip install "numpy==1.26.4"
+#
+# Import path: `from diarizen.pipelines.inference import DiariZenPipeline`
+# Model (pulled from HF once, then cached; runtime loads offline): BUT-FIT/diarizen-wavlm-large-s80-md
+#   pre-fetch it with: HF_TOKEN=hf_... .venv-diarizen/bin/python scripts/prefetch_diarizen_model.py
+
+# --- the torch-2.1.1 legacy pin-set (DiariZen does NOT resolve against latest torch/transformers) ---
+torch==2.1.1
+torchaudio==2.1.1
+transformers==4.36.2
+accelerate==0.25.0
+numpy==1.26.4
+
+# --- pyannote stack the vendored fork hard-pins ---
+pyannote.core==5.0.0
+pyannote.database==5.1.3
+pyannote.metrics==3.2.1
+pyannote.pipeline==3.0.1
+lightning==2.1.4
+pytorch-lightning==2.1.4
+torchmetrics==1.2.1
+pytorch-metric-learning==2.9.0
+torch-audiomentations==0.12.0
+asteroid-filterbanks==0.4.0
+speechbrain==0.5.16
+
+# --- DiariZen runtime deps ---
+einops==0.8.2
+librosa==0.11.0
+soundfile==0.14.0
+pyyaml==6.0.3
+h5py
+joblib
+pandas
+scipy
+tabulate
+toml
+torchinfo==1.8.0
+tqdm
+
+# --- gated e2e test (tests/test_diarize_diarizen_api.py) needs the FastAPI stack + pytest in this venv ---
+fastapi>=0.115,<1.0
+python-multipart>=0.0.9
+onnxruntime>=1.17
+cryptography>=42.0
+python-dotenv>=1.0
+httpx>=0.27
+pytest>=8.0
