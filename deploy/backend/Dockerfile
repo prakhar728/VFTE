@@ -23,7 +23,9 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # runtime code only — NOT frontend/, eval_data/, tests/, docs/, the venvs.
-COPY config.py main.py auth.py consent_api.py ratelimit.py ./
+# All root-level app modules (config, main, auth, consent_api, ratelimit, notify, …)
+# — glob so a new top-level module (e.g. P4's notify.py) can't be silently missed.
+COPY *.py ./
 COPY fpm ./fpm
 COPY webapp ./webapp
 COPY scripts ./scripts
