@@ -32,6 +32,7 @@ from fastapi.responses import StreamingResponse
 import config
 from fpm.audio import AudioDecodeError, decode_to_mono
 from fpm.diarize.diarizen_engine import ClipTooLongError, DiariZenDiarizer
+from fpm.enclave import get_attestation_quote
 
 log = logging.getLogger("diarize-service")
 logging.basicConfig(level=logging.INFO)
@@ -89,6 +90,14 @@ def _run_diarize(audio, sr: int, workspace: str):
 @app.get("/health")
 def health() -> dict:
     return {"status": "ok", "engine": _ENGINE, "model": getattr(_diarizer, "_model_name", None)}
+
+
+@app.get("/attestation")
+def attestation(nonce: str = "") -> dict:
+    """TDX attestation quote (P5) — a client (Conclave) verifies this CVM is the
+    real, unmodified diarization enclave before trusting it / routing audio to it.
+    Returns a tagged stub outside a TEE (IN_TEE!=true). Reuses fpm/enclave.py."""
+    return {"quote": get_attestation_quote(nonce), "engine": _ENGINE}
 
 
 @app.post("/diarize", dependencies=[Depends(require_token)])
