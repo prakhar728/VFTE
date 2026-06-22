@@ -36,7 +36,7 @@ from fpm.diarize.diarizen_engine import ClipTooLongError, DiariZenDiarizer
 log = logging.getLogger("diarize-service")
 logging.basicConfig(level=logging.INFO)
 
-app = FastAPI(title="DiariZen diarization service", version="1.0")
+app = FastAPI(title="FPM diarization service (diart | diarizen)", version="1.0")
 
 _TOKEN = os.environ.get("FPM_DIARIZE_TOKEN", "")
 # Heartbeat cadence while DiariZen runs — keeps the Phala gateway from dropping the
@@ -55,10 +55,26 @@ def require_token(authorization: str = Header(default="")) -> None:
         raise HTTPException(401, "invalid or missing bearer token")
 
 
+# Engine is selectable so the SAME service deploys two ways:
+#   FPM_DIARIZE_ENGINE=diart    → live/in-person acoustic diarization on CPU (P2)
+#   FPM_DIARIZE_ENGINE=diarizen → post-meeting batch re-clustering on GPU (P3, default)
+# Both implement the StreamingDiarizer start/feed/finish contract (fpm/diarize/base.py),
+# so the batch-style _run_diarize below works for either, and FPM core stays torch-free
+# and calls whichever via FPM_DIARIZER=remote.
+_ENGINE = os.environ.get("FPM_DIARIZE_ENGINE", "diarizen").lower()
+
+
+def _make_diarizer():
+    if _ENGINE == "diart":
+        from fpm.diarize.diart_engine import DiartDiarizer
+        return DiartDiarizer(offline=True)
+    return DiariZenDiarizer(offline=True)
+
+
 # One diarizer instance reused across requests: the torch model loads lazily on the
-# first finish() and stays warm. DiariZen is single-session, so a lock serializes
-# concurrent requests (e.g. a Conclave retry) — without it the shared buffer corrupts.
-_diarizer = DiariZenDiarizer(offline=True)
+# first finish() and stays warm. Single-session, so a lock serializes concurrent
+# requests (e.g. a Conclave retry) — without it the shared buffer corrupts.
+_diarizer = _make_diarizer()
 _diarize_lock = threading.Lock()
 
 
@@ -72,7 +88,7 @@ def _run_diarize(audio, sr: int, workspace: str):
 
 @app.get("/health")
 def health() -> dict:
-    return {"status": "ok", "engine": "diarizen", "model": _diarizer._model_name}
+    return {"status": "ok", "engine": _ENGINE, "model": getattr(_diarizer, "_model_name", None)}
 
 
 @app.post("/diarize", dependencies=[Depends(require_token)])
