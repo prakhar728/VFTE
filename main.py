@@ -28,6 +28,7 @@ from fpm.audio import AudioDecodeError, decode_to_mono
 from fpm.embed.onnx_embedder import OnnxSpeakerEmbedder
 from fpm.enroll import enroll
 from fpm.identify import SessionIdentifier
+from fpm.identify_spans import identified_dict, identify_spans
 from fpm.match import classify
 from fpm.store.store import VoiceprintStore
 from ratelimit import RateLimiter
@@ -302,6 +303,51 @@ async def diarize_endpoint(
         # final corrected transcript (retro-relabels applied)
         yield json.dumps({"type": "transcript",
                           "segments": [_segment_dict(s) for s in ident.transcript()]}) + "\n"
+
+    return StreamingResponse(stream(), media_type="application/x-ndjson")
+
+
+@app.post("/v1/identify-spans", dependencies=[Depends(enforce_write_limit)])
+async def identify_spans_endpoint(
+    request: Request,
+    file: UploadFile,
+    workspace: str = Form(...),
+    spans: str = Form(...),               # JSON: [{"start":..,"end":..,"local_speaker":".."}, ...]
+    tag: str = Form("offline"),
+    caller: Caller = Depends(require_scope("identify")),
+):
+    """Identity-only path (migration P5): the caller (capture) already diarized; VFTE just identifies.
+
+    The inverse of `/v1/diarize` — no diarizer runs here. Given a recording plus the diarization spans
+    `{start,end,local_speaker}`, re-embed each span with CAM++, match the workspace store, vote-lock, and
+    stream the same C2 `{start,end,local_speaker,voiceprint_id,name,decision,confidence}` NDJSON + a final
+    `transcript` line. `tag=offline` writes (mints/updates voiceprints); `tag=live` is read-only.
+    """
+    if not caller.allows_workspace(workspace):
+        raise HTTPException(403, f"caller '{caller.name}' not authorized for workspace '{workspace}'")
+    embedder = getattr(request.app.state, "embedder", None)
+    if embedder is None:
+        raise HTTPException(503, "ID embedder not loaded")
+    try:
+        audio = decode_to_mono(await file.read())
+    except AudioDecodeError as exc:
+        raise HTTPException(400, f"audio decode failed: {exc}")
+    try:
+        span_list = json.loads(spans)
+        assert isinstance(span_list, list)
+    except (json.JSONDecodeError, AssertionError) as exc:
+        raise HTTPException(400, f"spans must be a JSON array: {exc}")
+
+    sr = config.TARGET_SAMPLE_RATE
+
+    def stream():
+        segs = identify_spans(audio, workspace, span_list, store=request.app.state.store,
+                              embedder=embedder, sample_rate=sr, consumer=caller.name,
+                              read_only=(tag == "live"))
+        for s in segs:
+            yield json.dumps(identified_dict(s)) + "\n"
+        yield json.dumps({"type": "transcript",
+                          "segments": [identified_dict(s) for s in segs]}) + "\n"
 
     return StreamingResponse(stream(), media_type="application/x-ndjson")
 
