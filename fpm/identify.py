@@ -41,8 +41,8 @@ import numpy as np
 
 import config  # module-attr access so MIN_SEGMENT_SEC is monkeypatch-tunable in tests
 
-from .diarize.base import Segment, StreamingDiarizer
 from .match import classify
+from .types import Segment, StreamingDiarizer
 from .store.models import Voiceprint
 from .store.store import VoiceprintStore, new_voiceprint_id
 

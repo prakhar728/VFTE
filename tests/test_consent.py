@@ -9,8 +9,8 @@ import sqlite3
 import numpy as np
 
 from config import ID_EMBEDDING_DIM as DIM
-from fpm.diarize.base import Segment
-from fpm.diarize.mock import MockDiarizer
+from fpm.types import Segment
+from tests.mock_diarizer import MockDiarizer
 from fpm.enroll import enroll, identity_voiceprint_id
 from fpm.identify import SessionIdentifier
 from fpm.store.models import Voiceprint

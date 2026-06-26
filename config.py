@@ -64,19 +64,8 @@ MIN_SEGMENT_SEC = float(os.environ.get("FPM_MIN_SEGMENT_SEC", "1.0"))
 # --- enrollment ---
 ENROLL_QUALITY_MIN = float(os.environ.get("FPM_ENROLL_QUALITY_MIN", "0.50"))  # min self-sim to centroid
 
-# --- diarizer engine (offline path) — diart chosen at the C.2 spike (real-time on CPU) ---
-# Default stays `diart` (the core venv is torch-free; the diarizen post engine runs in its own
-# venv/instance via FPM_DIARIZER=diarizen). See docs/build/branch-A-engine.md D6.
-DIARIZATION_ENGINE = os.environ.get("FPM_DIARIZER", "diart")   # diart | diarizen | remote | onnx (E.3)
-# `remote`: forward audio to the standalone diarize service (deploy/diarize-service/) so the core
-# stays torch-free. Identity (CAM++) still runs locally — the remote box never sees voiceprints.
-DIARIZER_REMOTE_URL = os.environ.get("FPM_DIARIZER_URL", "")          # e.g. https://<cvm>.phala.network
-DIARIZER_REMOTE_TOKEN = os.environ.get("FPM_DIARIZE_TOKEN", "")        # bearer token the service checks
-DIARIZER_REMOTE_TIMEOUT = float(os.environ.get("FPM_DIARIZER_TIMEOUT", "600"))  # batch RTF~1.3 → generous
-# DiariZen decodes the whole clip in one batch; peak RAM scales with length (~16.6 GB on a ~1 h
-# AMI mix, docs/bakeoff-offline.md). Cap clip length on the no-GPU box — the engine rejects
-# oversized audio in feed() before the model loads. 0 disables the cap.
-DIARIZEN_MAX_CLIP_SEC = float(os.environ.get("FPM_DIARIZEN_MAX_CLIP_SEC", "1800"))
+# --- diarization REMOVED (migration P5): VFTE is identity-only. Diarization lives in `capture`;
+#     this service identifies pre-diarized spans (/v1/identify-spans). No diarizer engine config here. ---
 
 # --- write rate limiting (per caller token, fixed window) ---
 RATE_LIMIT_WRITES = int(os.environ.get("FPM_RATE_LIMIT_WRITES", "120"))

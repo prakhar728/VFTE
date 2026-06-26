@@ -10,13 +10,13 @@ identifier retains the whole clip (like DiariZen's post pass) and can re-embed a
 meeting. So the exact same vote-lock / mint-anonymous / retro-relabel identity logic runs — only the
 source of the spans changed (capture instead of an in-process diarizer).
 
-After the P5 strip removes `fpm/diarize/`, the Segment/StreamingDiarizer imports below move to a shared
-module; until then they come from the (still-present) diarize base.
+The Segment/StreamingDiarizer seam lives in `fpm/types.py` (the diarizer engines were removed in the P5
+strip; only the contract the identifier speaks remains).
 """
 from __future__ import annotations
 
-from .diarize.base import Segment, StreamingDiarizer
 from .identify import IdentifiedSegment, SessionIdentifier
+from .types import Segment, StreamingDiarizer
 
 
 class SpanReplayDiarizer(StreamingDiarizer):

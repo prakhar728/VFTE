@@ -6,8 +6,8 @@ import numpy as np
 import pytest
 import soundfile as sf
 
-from fpm.diarize.base import Segment
-from fpm.diarize.mock import MockDiarizer
+from fpm.types import Segment
+from tests.mock_diarizer import MockDiarizer
 from fpm.embed.onnx_embedder import OnnxSpeakerEmbedder
 from fpm.enroll import enroll, identity_voiceprint_id
 from fpm.identify import SessionIdentifier

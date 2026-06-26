@@ -11,7 +11,7 @@ import numpy as np
 import pytest
 import soundfile as sf
 
-from fpm.diarize.base import Segment
+from fpm.types import Segment
 from fpm.embed.onnx_embedder import OnnxSpeakerEmbedder
 from fpm.enroll import enroll
 from fpm.identify_spans import SpanReplayDiarizer, identified_dict, identify_spans
