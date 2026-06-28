@@ -1,10 +1,11 @@
 "use client";
 
 import { useState } from "react";
-import { Activity, Fingerprint, Trash2 } from "lucide-react";
+import { Activity, Download, Fingerprint, ShieldCheck, ShieldQuestion, Trash2 } from "lucide-react";
 
-import { api, type Voiceprint } from "@/lib/api";
+import { api, type DeletionReceipt, type Voiceprint } from "@/lib/api";
 import { cn, fmtTime } from "@/lib/utils";
+import { downloadReceipt, verifyReceipt } from "@/lib/receipt";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
@@ -27,6 +28,8 @@ export function VoiceprintCard({
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState<string | null>(null);
   const [showAll, setShowAll] = useState(false);
+  const [receipt, setReceipt] = useState<DeletionReceipt | null>(null);
+  const [verified, setVerified] = useState<boolean | null>(null);
   const anonymous = !vp.identify_allowed;
 
   async function flip(
@@ -50,12 +53,34 @@ export function VoiceprintCard({
     if (!confirm("Permanently delete this voiceprint? This can't be undone.")) return;
     setBusy(true);
     try {
-      await api.forget(vp.workspace_id, vp.voiceprint_id);
-      onChanged();
+      const res = await api.forget(vp.workspace_id, vp.voiceprint_id);
+      if (res.receipt) {
+        setReceipt(res.receipt);
+        // verify the receipt client-side against the published key (no trust in us)
+        try {
+          const key = await api.deletionReceiptKey();
+          setVerified(await verifyReceipt(res.receipt, key));
+        } catch {
+          setVerified(null);
+        }
+      } else {
+        onChanged(); // no receipt (shouldn't happen on a real delete) → just refresh
+      }
     } catch {
       setNote("Delete failed — try again.");
+    } finally {
       setBusy(false);
     }
+  }
+
+  if (receipt) {
+    return (
+      <ReceiptPanel
+        receipt={receipt}
+        verified={verified}
+        onDone={onChanged}
+      />
+    );
   }
 
   const usage = showAll ? vp.usage : vp.usage.slice(0, 4);
@@ -162,6 +187,80 @@ export function VoiceprintCard({
           Forget me
         </Button>
       </div>
+    </div>
+  );
+}
+
+function ReceiptPanel({
+  receipt,
+  verified,
+  onDone,
+}: {
+  receipt: DeletionReceipt;
+  verified: boolean | null;
+  onDone: () => void;
+}) {
+  return (
+    <div className="animate-rise rounded-2xl border border-primary/30 bg-card/60 p-5 backdrop-blur-sm">
+      <div className="flex items-start gap-3">
+        <div className="mt-0.5 flex size-9 items-center justify-center rounded-lg border border-primary/40 bg-primary/5 text-primary">
+          {verified === false ? (
+            <ShieldQuestion className="size-4" />
+          ) : (
+            <ShieldCheck className="size-4" />
+          )}
+        </div>
+        <div>
+          <div className="flex items-center gap-2">
+            <h3 className="text-[15px] font-semibold leading-tight">Voiceprint deleted</h3>
+            {verified === true ? (
+              <Badge tone="emerald">verified ✓</Badge>
+            ) : verified === false ? (
+              <Badge tone="warn">verification failed</Badge>
+            ) : (
+              <Badge tone="muted">verify with CLI</Badge>
+            )}
+          </div>
+          <p className="mt-1 text-xs text-muted-foreground">
+            A signed, independently verifiable receipt was issued. Keep it as proof the
+            voiceprint was erased — anyone can verify it offline with our public key.
+          </p>
+        </div>
+      </div>
+
+      <dl className="mt-4 space-y-1.5 rounded-xl border border-border bg-background/40 p-4 font-mono text-[11px]">
+        <Row label="voiceprint" value={receipt.payload.voiceprint_id} />
+        <Row label="deleted_at" value={receipt.payload.deleted_at} />
+        <Row label="ledger_row" value={String(receipt.payload.ledger_row_id)} />
+        <Row label="key_id" value={receipt.payload.key_id} />
+      </dl>
+
+      <div className="mt-4 flex items-center justify-between border-t border-border pt-4">
+        <a
+          href="/verify"
+          className="text-xs text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
+        >
+          How to verify
+        </a>
+        <div className="flex items-center gap-2">
+          <Button variant="outline" size="sm" onClick={() => downloadReceipt(receipt)}>
+            <Download className="size-3.5" />
+            Download .json
+          </Button>
+          <Button size="sm" onClick={onDone}>
+            Done
+          </Button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function Row({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="flex items-center justify-between gap-3">
+      <dt className="text-muted-foreground">{label}</dt>
+      <dd className="truncate text-foreground">{value}</dd>
     </div>
   );
 }

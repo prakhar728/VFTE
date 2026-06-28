@@ -21,8 +21,23 @@ import numpy as np
 
 from config import DB_PATH, ID_EMBEDDING_DIM, ID_EMBEDDING_MODEL
 
+from dataclasses import dataclass
+
 from . import crypto
 from .models import Voiceprint
+
+
+@dataclass
+class DeleteResult:
+    """Outcome of a `forget` delete. Truthy iff a row was actually deleted, so legacy
+    `if store.delete(...)` callers keep working; carries the surviving `usage_ledger`
+    "forget" row id + timestamp that the signed deletion receipt references."""
+    deleted: bool
+    ledger_row_id: int | None = None
+    deleted_at: str | None = None
+
+    def __bool__(self) -> bool:
+        return self.deleted
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS voiceprints(
@@ -68,6 +83,16 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_proposal_unique
   ON proposals(workspace_id, voiceprint_id, proposed_email);
 CREATE INDEX IF NOT EXISTS idx_proposal_email ON proposals(proposed_email);
 CREATE TABLE IF NOT EXISTS store_meta(key TEXT PRIMARY KEY, value TEXT);
+-- deletion receipts (Task #1): every signed "forget me" receipt we issue, append-only,
+-- so the dashboard can re-show a past receipt and we can prove issuance after the
+-- voiceprint row is gone. NO owner_email plaintext — only the sha256 hash.
+CREATE TABLE IF NOT EXISTS deletion_receipts(
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  workspace_id TEXT, voiceprint_id TEXT,
+  owner_email_hash TEXT, deleted_at TEXT,
+  ledger_row_id INTEGER,
+  payload_json TEXT, signature TEXT, alg TEXT, key_id TEXT);
+CREATE INDEX IF NOT EXISTS idx_receipt_owner ON deletion_receipts(owner_email_hash);
 """
 
 # Column order for proposal-row reads → dict (the C4 wire shape).
@@ -247,25 +272,72 @@ class VoiceprintStore:
             self._conn.commit()
             return True
 
-    def delete(self, workspace_id: str, voiceprint_id: str, actor: str = "dashboard") -> bool:
-        """'Forget me' (demo): scrub the FPM voiceprint. The ledger row survives (append-
-        only proof trail); crypto-shred + re-enroll tombstone are deferred (doc §6)."""
+    def delete(self, workspace_id: str, voiceprint_id: str, actor: str = "dashboard") -> DeleteResult:
+        """'Forget me': hard-delete the FPM voiceprint row (embeddings gone). The append-
+        only `usage_ledger` "forget" row survives as the proof anchor — its id + timestamp
+        are returned so the signed deletion receipt can reference it. crypto-shred +
+        re-enroll tombstone are deferred (doc §6).
+
+        Returns a `DeleteResult` (truthy iff something was deleted). On a miss (not found /
+        wrong workspace / already deleted) no ledger row is written and ledger_row_id/
+        deleted_at are None — so an idempotent re-delete issues no receipt."""
         with self._lock:
             cur = self._conn.execute(
                 "DELETE FROM voiceprints WHERE voiceprint_id=? AND workspace_id=?",
                 (voiceprint_id, workspace_id),
             )
             deleted = cur.rowcount > 0
+            ledger_row_id = deleted_at = None
             if deleted:
-                self._conn.execute(
+                deleted_at = _now()
+                led = self._conn.execute(
                     "INSERT INTO usage_ledger (workspace_id, voiceprint_id, event, consumer, purpose, ts)"
                     " VALUES (?,?,?,?,?,?)",
-                    (workspace_id, voiceprint_id, "forget", actor, "user erasure", _now()),
+                    (workspace_id, voiceprint_id, "forget", actor, "user erasure", deleted_at),
                 )
+                ledger_row_id = led.lastrowid
             self._conn.commit()
             self._centroids.get(workspace_id, {}).pop(voiceprint_id, None)
             self._flags.get(workspace_id, {}).pop(voiceprint_id, None)
-            return deleted
+            return DeleteResult(deleted=deleted, ledger_row_id=ledger_row_id, deleted_at=deleted_at)
+
+    # ── deletion receipts (Task #1: cryptographic proof of deletion) ──
+
+    def add_deletion_receipt(self, envelope: dict) -> int:
+        """Persist an issued, signed receipt (append-only). Returns the new row id.
+
+        Reads the anchor fields off the *signed payload* (not loose args) so what we store
+        is exactly what was signed. No owner_email plaintext — only the hash in the payload."""
+        p = envelope["payload"]
+        with self._lock:
+            cur = self._conn.execute(
+                "INSERT INTO deletion_receipts (workspace_id, voiceprint_id, owner_email_hash,"
+                " deleted_at, ledger_row_id, payload_json, signature, alg, key_id)"
+                " VALUES (?,?,?,?,?,?,?,?,?)",
+                (p["workspace_id"], p["voiceprint_id"], p["owner_email_hash"], p["deleted_at"],
+                 p["ledger_row_id"], json.dumps(p, sort_keys=True, separators=(",", ":")),
+                 envelope["signature"], envelope["alg"], envelope["key_id"]),
+            )
+            self._conn.commit()
+            return cur.lastrowid
+
+    def deletion_receipts_for_hash(self, owner_email_hash: str) -> list[dict]:
+        """All issued receipts for an owner (by email hash), newest first — reconstructed
+        as verifiable `{payload, signature, alg, key_id}` envelopes."""
+        rows = self._conn.execute(
+            "SELECT payload_json, signature, alg, key_id FROM deletion_receipts "
+            "WHERE owner_email_hash=? ORDER BY id DESC",
+            (owner_email_hash,),
+        ).fetchall()
+        return [
+            {"payload": json.loads(pj), "signature": sig, "alg": alg, "key_id": kid}
+            for pj, sig, alg, kid in rows
+        ]
+
+    def meta(self, key: str, default: str | None = None) -> str | None:
+        """Read a `store_meta` value (e.g. embedder_model / embedder_dim) stamped at open."""
+        r = self._conn.execute("SELECT value FROM store_meta WHERE key=?", (key,)).fetchone()
+        return r[0] if r else default
 
     # ── consent flags + ledger (WS3/WS4/WS5) ─────────────────
 

@@ -11,6 +11,7 @@ for tests). All inference is local; nothing leaves the process.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 from contextlib import asynccontextmanager
@@ -29,6 +30,7 @@ from fpm.embed.onnx_embedder import OnnxSpeakerEmbedder
 from fpm.enroll import enroll
 from fpm.identify_spans import identified_dict, identify_spans
 from fpm.match import classify
+from fpm.receipts import ReceiptSigner
 from fpm.store.store import VoiceprintStore
 from ratelimit import RateLimiter
 
@@ -69,6 +71,9 @@ async def lifespan(app: FastAPI):
         app.state.rate_limiter = RateLimiter(config.RATE_LIMIT_WRITES, config.RATE_LIMIT_WINDOW_SEC)
     if not getattr(app.state, "store", None):
         app.state.store = VoiceprintStore().open()
+    # Ed25519 signer for deletion receipts (Task #1): TEE sealed key → FPM_RECEIPT_KEY → keyfile.
+    if not getattr(app.state, "receipt_signer", None):
+        app.state.receipt_signer = ReceiptSigner.from_config()
     if not getattr(app.state, "embedder", None):
         app.state.embedder = (
             OnnxSpeakerEmbedder(config.ID_EMBEDDER_PATH).load()
@@ -107,13 +112,43 @@ def health() -> dict:
 
 
 @app.get("/attestation")
-def attestation(nonce: str = "") -> dict:
+def attestation(request: Request, nonce: str = "") -> dict:
     """TDX attestation quote so clients can verify they're talking to the real
     enclave before trusting it. `nonce` is bound into the quote's report_data to
-    prove freshness. Outside a TEE this returns a tagged stub (in_tee=false)."""
+    prove freshness. Outside a TEE this returns a tagged stub (in_tee=false).
+
+    The deletion-receipt public key is *also* bound into report_data
+    (`sha256(nonce || pubkey)`) and echoed as `receipt_pubkey_sha256`, so a verifier
+    can confirm via the quote that this pubkey belongs to the genuine deletion code at
+    the published measurement — chaining: TDX quote → measurement + pubkey ⇒ receipts
+    signed by that pubkey are from real deletion."""
     from fpm.enclave import IN_TEE, get_attestation_quote
 
-    return {"in_tee": IN_TEE, "nonce": nonce, "quote": get_attestation_quote(nonce)}
+    signer: ReceiptSigner | None = getattr(request.app.state, "receipt_signer", None)
+    pubkey_raw = signer.public_key_raw() if signer else b""
+    return {
+        "in_tee": IN_TEE, "nonce": nonce,
+        "quote": get_attestation_quote(nonce, bind=pubkey_raw),
+        "receipt_pubkey_sha256": hashlib.sha256(pubkey_raw).hexdigest() if pubkey_raw else None,
+        "receipt_key_id": signer.key_id if signer else None,
+    }
+
+
+@app.get("/v1/deletion-receipt-key")
+def deletion_receipt_key(request: Request) -> dict:
+    """Publish the deletion-receipt verification key so anyone can verify a receipt
+    OFFLINE. `key_id` (= sha256(raw pubkey)[:16]) names the active key; `in_tee` says
+    whether it's enclave-sealed. Bound to the enclave measurement via /attestation."""
+    from fpm.enclave import IN_TEE
+
+    signer: ReceiptSigner = request.app.state.receipt_signer
+    return {
+        "alg": "ed25519",
+        "public_key": signer.public_key_pem(),
+        "public_key_raw_hex": signer.public_key_raw().hex(),
+        "key_id": signer.key_id,
+        "in_tee": IN_TEE,
+    }
 
 
 @app.post("/v1/enroll", dependencies=[Depends(enforce_write_limit)])

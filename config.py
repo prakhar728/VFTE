@@ -28,6 +28,16 @@ SERVICE_VERSION = "0.0.1"
 DATA_DIR = Path(os.environ.get("FPM_DATA_DIR", "./data"))
 DB_PATH = DATA_DIR / "voiceprints.db"
 
+# --- deletion-receipt signing (Task #1: cryptographic proof of deletion) ---
+# Ed25519 signing key for "forget me" receipts. Derivation mirrors crypto.get_or_create_key()'s
+# priority: TEE sealed key (path RECEIPT_SEAL_KEY_PATH, distinct from the store key) → this env
+# (32-byte seed, hex/base64) for off-TEE determinism in dev/CI → a 0600 dev keyfile under DATA_DIR.
+RECEIPT_KEY = os.environ.get("FPM_RECEIPT_KEY", "")
+# Stable seal-derivation path — separate from the store key (fpm/voiceprint-store) so the signing
+# key and the at-rest encryption key are cryptographically independent. Don't change it post-deploy
+# (would rotate the pubkey and orphan published key_ids).
+RECEIPT_SEAL_KEY_PATH = os.environ.get("FPM_RECEIPT_SEAL_KEY_PATH", "fpm/deletion-signing")
+
 # --- audio ---
 TARGET_SAMPLE_RATE = 16_000  # all internal processing is 16 kHz mono
 

@@ -25,6 +25,35 @@ export type Voiceprint = {
   usage: UsageEvent[];
 };
 
+/** A signed deletion receipt (Task #1) — offline-verifiable proof a voiceprint was deleted. */
+export type ReceiptPayload = {
+  version: string;
+  voiceprint_id: string;
+  workspace_id: string;
+  owner_email_hash: string;
+  embedder_model: string;
+  embedder_dim: number;
+  deleted_at: string;
+  ledger_row_id: number;
+  alg: string;
+  key_id: string;
+};
+
+export type DeletionReceipt = {
+  payload: ReceiptPayload;
+  signature: string;
+  alg: string;
+  key_id: string;
+};
+
+export type ReceiptKey = {
+  alg: string;
+  public_key: string; // PEM
+  public_key_raw_hex: string;
+  key_id: string;
+  in_tee: boolean;
+};
+
 export type Me = {
   email: string | null;
   signed_in: boolean;
@@ -85,8 +114,15 @@ export const api = {
     ),
 
   forget: (workspaceId: string, voiceprintId: string) =>
-    postJSON<{ deleted: boolean }>(
+    postJSON<{ deleted: boolean; receipt?: DeletionReceipt }>(
       `/v1/me/voiceprints/${encodeURIComponent(workspaceId)}/${encodeURIComponent(voiceprintId)}/forget`,
+    ),
+
+  // Task #1: published verification key + the user's issued deletion receipts.
+  deletionReceiptKey: () => getJSON<ReceiptKey>("/v1/deletion-receipt-key"),
+  deletionReceipts: () =>
+    getJSON<{ email: string; count: number; receipts: DeletionReceipt[] }>(
+      "/v1/me/deletion-receipts",
     ),
 
   // P4 consent inbox: proposals where someone tagged this user's voice.

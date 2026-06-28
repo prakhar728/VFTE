@@ -49,12 +49,17 @@ def _get_client():
     return _client
 
 
-def get_sealed_key() -> bytes | None:
-    """Derive a 32-byte AES master from the CVM's hardware-bound key, or None.
+def get_sealed_key(path: str | None = None, subject: str = "voiceprint-store-encryption") -> bytes | None:
+    """Derive a 32-byte master from the CVM's hardware-bound key, or None.
+
+    `path` selects the derivation path (defaults to the voiceprint-store path
+    `_KEY_PATH`); pass a distinct path (e.g. `fpm/deletion-signing`) to derive an
+    INDEPENDENT key — same CVM, different path ⇒ a different, unrelated key. So the
+    receipt-signing seed is cryptographically separate from the at-rest store key.
 
     Returns None when not in a TEE or the agent is unreachable, so the caller can
     fall back to the env/keyfile path. The dstack key is SHA-256'd to a fixed 32
-    bytes so it's the right length for AES-256 regardless of the SDK's raw width.
+    bytes so it's the right length regardless of the SDK's raw width.
     """
     if not IN_TEE:
         return None
@@ -62,7 +67,7 @@ def get_sealed_key() -> bytes | None:
     if client is None:
         return None
     try:
-        resp = client.get_key(_KEY_PATH, "voiceprint-store-encryption")
+        resp = client.get_key(path or _KEY_PATH, subject)
         raw = resp.decode_key()
         return hashlib.sha256(raw).digest()
     except Exception as e:  # noqa: BLE001
@@ -70,23 +75,35 @@ def get_sealed_key() -> bytes | None:
         return None
 
 
-def get_attestation_quote(nonce: str = "") -> str:
-    """Hex-encoded TDX quote from the dstack agent; tagged stub outside the TEE."""
+def get_attestation_quote(nonce: str = "", bind: bytes = b"") -> str:
+    """Hex-encoded TDX quote from the dstack agent; tagged stub outside the TEE.
+
+    `bind` is extra bytes folded into report_data alongside the nonce — used to
+    anchor the deletion-receipt public key (`bind=sha256(pubkey)`) to the enclave
+    measurement, so a verifier can prove via the quote that this pubkey belongs to
+    the genuine deletion code at the published measurement.
+    """
     if not IN_TEE:
         return "stub_attestation_quote_not_in_tee"
     client = _get_client()
     if client is None:
         return "stub_attestation_quote_dstack_unreachable"
     try:
-        return client.get_quote(_normalize_report_data(nonce)).quote
+        return client.get_quote(_normalize_report_data(nonce, bind)).quote
     except Exception as e:  # noqa: BLE001
         logger.warning("dstack get_quote failed: %s", e)
         return "stub_attestation_quote_dstack_unreachable"
 
 
-def _normalize_report_data(nonce: str) -> bytes:
-    """Pack a nonce into ≤64 bytes for TDX report_data (empty → 32 zero bytes)."""
+def _normalize_report_data(nonce: str, bind: bytes = b"") -> bytes:
+    """Pack nonce (+ optional `bind` bytes) into ≤64 bytes for TDX report_data.
+
+    With `bind`, report_data = sha256(nonce_bytes || bind) (always 32 bytes) so both
+    freshness (nonce) and the bound pubkey are committed. Without it, the legacy
+    nonce-only packing is unchanged (empty → 32 zero bytes)."""
     raw = nonce.encode("utf-8") if nonce else b""
+    if bind:
+        return hashlib.sha256(raw + bind).digest()
     if not raw:
         return b"\x00" * 32
     return hashlib.sha256(raw).digest() if len(raw) > 64 else raw

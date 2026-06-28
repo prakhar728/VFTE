@@ -124,7 +124,9 @@ def test_find_by_owner_email(tmp_path):
 def test_delete_logs_forget(tmp_path):
     s = _store(tmp_path)
     s.upsert(_vp("ws1", "vp_a", seed=8))
-    assert s.delete("ws1", "vp_a", actor="dashboard") is True
+    res = s.delete("ws1", "vp_a", actor="dashboard")
+    assert res and res.deleted is True                        # DeleteResult, truthy on a real delete
+    assert res.ledger_row_id is not None and res.deleted_at   # proof anchor returned
     assert s.get("ws1", "vp_a") is None                       # gone
     forget = [r for r in s.usage_for_voiceprint("ws1", "vp_a") if r["event"] == "forget"]
     assert forget and forget[0]["consumer"] == "dashboard"    # ledger survives the delete

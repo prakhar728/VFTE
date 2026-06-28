@@ -24,6 +24,8 @@ from auth import (
     new_state,
     require_user,
 )
+from fpm import receipts
+from fpm.receipts import ReceiptSigner
 
 router = APIRouter()
 
@@ -169,12 +171,46 @@ def forget_me(
     request: Request, workspace_id: str, voiceprint_id: str,
     email: str = Depends(require_user),
 ) -> dict:
-    """Erase the voiceprint (demo = plain delete; crypto-shred + tombstone deferred, §6)."""
+    """Erase the voiceprint + return a *signed, offline-verifiable deletion receipt*.
+
+    The voiceprint row is hard-deleted (embeddings gone); the append-only `usage_ledger`
+    "forget" row survives as the proof anchor (crypto-shred + tombstone deferred, §6). We
+    then sign a receipt referencing that ledger row with the TEE-sealed Ed25519 key and
+    persist it (deletion_receipts) so it can be re-shown and independently verified later.
+
+    A receipt is issued ONLY on an actual deletion; an idempotent re-delete returns
+    `{deleted: false}` with no receipt.
+    """
     store = request.app.state.store
     _owned_or_403(store, workspace_id, voiceprint_id, email)
-    deleted = store.delete(workspace_id, voiceprint_id, actor=email)
+    result = store.delete(workspace_id, voiceprint_id, actor=email)
     # TODO(deletion cascade, decision F): emit a deletion event Conclave can subscribe to.
-    return {"voiceprint_id": voiceprint_id, "deleted": deleted}
+    if not result.deleted:
+        return {"voiceprint_id": voiceprint_id, "deleted": False}
+
+    signer: ReceiptSigner = request.app.state.receipt_signer
+    payload = {
+        "version": receipts.RECEIPT_VERSION,
+        "voiceprint_id": voiceprint_id,
+        "workspace_id": workspace_id,
+        "owner_email_hash": receipts.owner_email_hash(email),
+        "embedder_model": store.meta("embedder_model", config.ID_EMBEDDING_MODEL),
+        "embedder_dim": int(store.meta("embedder_dim", str(config.ID_EMBEDDING_DIM))),
+        "deleted_at": result.deleted_at,
+        "ledger_row_id": result.ledger_row_id,
+    }
+    envelope = signer.sign(payload)
+    store.add_deletion_receipt(envelope)
+    return {"voiceprint_id": voiceprint_id, "deleted": True, "receipt": envelope}
+
+
+@router.get("/v1/me/deletion-receipts")
+def my_deletion_receipts(request: Request, email: str = Depends(require_user)) -> dict:
+    """The signed-in user's issued deletion receipts (owner-scoped via email hash), so the
+    dashboard can re-show + re-verify a past deletion. Each item is a verifiable envelope."""
+    store = request.app.state.store
+    receipts_out = store.deletion_receipts_for_hash(receipts.owner_email_hash(email))
+    return {"email": email, "count": len(receipts_out), "receipts": receipts_out}
 
 
 # ── P4 trust handshake: confirm / deny a pending email binding (WS2) ──
