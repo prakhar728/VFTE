@@ -60,7 +60,7 @@ This is the product's trust primitive: **a voiceprint only gets a name when the 
 - **match / recognize** — embed a span, cosine-classify it against the workspace's centroids, reuse the matched `voiceprint_id`.
 - **mint anonymous** — a speaker the store doesn't know gets a new voiceprint with `name=""` (recognizable next time, nameable later via consent).
 
-**The consent plane.** A name reaches a voiceprint only through **propose → confirm → bind**. A host proposes `(voiceprint, email, name)`; on confirmation the store binds `owner_email` **and** `name` (via `claim_owner` + `set_name`, both audited). The data subject controls their voiceprint from the dashboard: **stay-anonymous** (`identify_allowed=False` — cluster persists, name withheld everywhere), **pause-enrollment** (`enroll_allowed=False`), or **forget** (delete). Flags are enforced on *every* match from a hot in-memory cache (no decrypt needed to read two booleans).
+**The consent plane.** A name reaches a voiceprint only through **propose → confirm → bind**. A host proposes `(voiceprint, email, name)`; on confirmation the store binds `owner_email` **and** `name` (via `claim_owner` + `set_name`, both audited). The data subject controls their voiceprint from the dashboard: **stay-anonymous** (`identify_allowed=False` — cluster persists, name withheld everywhere), **pause-enrollment** (`enroll_allowed=False`), or **forget** (delete — returns a **signed, verifiable deletion receipt**). Flags are enforced on *every* match from a hot in-memory cache (no decrypt needed to read two booleans).
 
 **Decision tiers.** Open-set matching (`fpm/match.py`) returns one of four raw tiers via calibrated cosine + rejection:
 
@@ -91,6 +91,7 @@ Two planes, two auth models:
 |---|---|
 | `GET /health` | `{status, service, version}` liveness. |
 | `GET /attestation?nonce=` | TDX attestation quote bound to `nonce`; `{in_tee, nonce, quote}`. Outside a TEE returns a tagged stub (`in_tee:false`). |
+| `GET /v1/deletion-receipt-key` | Publish the Ed25519 **deletion-receipt** public key `{alg, public_key, key_id, in_tee}` for offline verification of forget receipts; the pubkey is bound into `/attestation` report_data. |
 
 ### Identity (M2M — token scope in brackets)
 | Method · Path | Body | Purpose |
@@ -119,7 +120,7 @@ Two planes, two auth models:
 | `GET /v1/me` | `{email, signed_in, google_enabled, dev_login}`. |
 | `GET /v1/me/voiceprints` | Every voiceprint the signed-in user owns (across workspaces) + usage history. |
 | `POST /v1/me/voiceprints/{ws}/{vid}/flags` | Set `identify_allowed` / `enroll_allowed` (stay-anonymous / pause). Owner-only. |
-| `POST /v1/me/voiceprints/{ws}/{vid}/forget` | Delete the voiceprint (demo = plain delete; crypto-shred deferred). Owner-only. |
+| `POST /v1/me/voiceprints/{ws}/{vid}/forget` | Hard-delete the voiceprint **and return a signed, independently-verifiable deletion receipt** (Ed25519, TEE-sealed key) referencing the surviving `usage_ledger` "forget" row; the receipt is also persisted in `deletion_receipts`. Owner-only. (Crypto-shred + re-enroll tombstone still deferred.) |
 | `GET /v1/me/pending` | The signed-in user's pending-identifications inbox (proposals tagged to their email). |
 | `POST /v1/confirm` · `POST /v1/deny` | Confirm (`bind owner_email+name`) or deny (`stays Speaker N`) a pending proposal. Only the tagged target may act. |
 
@@ -186,6 +187,7 @@ A single AES-encrypted, WAL-mode SQLite DB at **`/app/data/voiceprints.db`** (`F
 | `proposals` | `proposal_id` PK, `workspace_id`, `voiceprint_id`, `proposed_email`, `proposed_by`, `proposed_name`, `status` (`pending`\|`confirmed`\|`denied`), `created_at/confirmed_at/denied_at` | Pending email-binding tags. **Unique** per `(workspace, voiceprint, proposed_email)` → re-tagging never duplicates. `owner_email` binds only on confirm. |
 | `binding_audit` | `workspace_id`, `voiceprint_id`, `old_name`, `new_name`, `actor`, `ts` | Every name change — bindings are reversible + traceable. |
 | `usage_ledger` | `workspace_id`, `voiceprint_id`, `event`, `consumer`, `purpose`, `ts` | Append-only proof trail: enroll, identify/match, name_bind, control (flag change), forget. Not telemetry. |
+| `deletion_receipts` | `id` PK, `workspace_id`, `voiceprint_id`, `owner_email_hash`, `deleted_at`, `ledger_row_id`, `payload_json`, `signature`, `alg`, `key_id` | Append-only record of issued **forget receipts** (Ed25519-signed); survives the voiceprint so a deletion stays provable. No plaintext email — hash only. |
 | `vocab` | `workspace_id` PK, `terms` (JSON) | Per-workspace ASR vocabulary. |
 | `store_meta` | `key` PK, `value` | Records `embedder_model` + `embedder_dim`; the store **refuses to open** against a different-dim embedder (cross-model matches are meaningless). |
 
@@ -277,4 +279,5 @@ pytest
 - **Identity-only strip complete** — `P5a` added `/v1/identify-spans` (additive), `P5b` stripped diarization out of VFTE (commits `69d6430`, `df03de1`). Diarization now lives in **capture**.
 - **Validated live end-to-end 2026-06-27** in the enroll → tag → recognize flow (meeting 1 mints + names via consent; meeting 2 recognizes the same speakers without growing the count). **Merged to `main`.**
 - Deployment topology: stateful **backend CVM** (sealed store, port 8085) on Phala + the **Next.js frontend** (port 3002, typically Vercel). The `deploy/diarize-service` CVM is legacy — diarization ownership moved to `capture`.
-- Deferred (per code TODOs / docs): crypto-shred + tombstone on forget, a deletion-cascade event Conclave can subscribe to, and JWKS id_token verification on Google sign-in.
+- **Forget now returns a signed, offline-verifiable deletion receipt** (Ed25519, TEE-sealed key; `GET /v1/deletion-receipt-key` + `docs/deletion-receipt.md` + Python/JS reference verifiers). Merged to `main` 2026-06-28 (Task #1).
+- Deferred (per code TODOs / docs): crypto-shred + re-enroll tombstone on forget (Levels B/C), a deletion-cascade event Conclave can subscribe to, and JWKS id_token verification on Google sign-in.
