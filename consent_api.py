@@ -10,9 +10,13 @@ touch a voiceprint whose `owner_email` matches your session.
 """
 from __future__ import annotations
 
+import base64
+import binascii
+from datetime import datetime, timezone
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+import numpy as np
+from fastapi import APIRouter, Body, Depends, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from pydantic import BaseModel
 
@@ -26,6 +30,7 @@ from auth import (
 )
 from fpm import receipts
 from fpm.receipts import ReceiptSigner
+from fpm.store.models import Voiceprint
 
 router = APIRouter()
 
@@ -211,6 +216,196 @@ def my_deletion_receipts(request: Request, email: str = Depends(require_user)) -
     store = request.app.state.store
     receipts_out = store.deletion_receipts_for_hash(receipts.owner_email_hash(email))
     return {"email": email, "count": len(receipts_out), "receipts": receipts_out}
+
+
+# ── voiceprint export / import (Task #4: signed download / re-upload) ──
+# Owner-scoped, session-authed. Export = a signed, offline-verifiable file of the user's
+# own voiceprint(s) (plaintext vectors, ed25519-signed for integrity via the Task #1 key).
+# Import = restore from such a file WITHOUT the original audio: signature REQUIRED, embedder
+# model/dim hard-matched, ownership enforced. The centroid is always *recomputed* from the
+# exemplars (never trusted from the file); consent flags + name are restored as snapshotted.
+
+def _store_meta(store) -> tuple[str, int]:
+    """The live embedder identity (model, dim) the store was opened against."""
+    return (
+        store.meta("embedder_model", config.ID_EMBEDDING_MODEL),
+        int(store.meta("embedder_dim", str(config.ID_EMBEDDING_DIM))),
+    )
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _export_payload(store, vp: Voiceprint) -> dict:
+    """The signed-payload snapshot of one voiceprint. Exemplars are decrypted plaintext
+    float32 vectors (base64, exact round-trip); the centroid is omitted — it's recomputed
+    deterministically from the exemplars on import."""
+    model, dim = _store_meta(store)
+    return {
+        "version": config.EXPORT_VERSION,
+        "voiceprint_id": vp.voiceprint_id,
+        "workspace_id": vp.workspace_id,
+        "owner_email": vp.owner_email,
+        "name": vp.name,
+        "enroll_allowed": bool(vp.enroll_allowed),
+        "identify_allowed": bool(vp.identify_allowed),
+        "embedder_model": model,
+        "embedder_dim": dim,
+        "exemplars_b64": [
+            base64.b64encode(np.asarray(e, dtype=np.float32).tobytes()).decode("ascii")
+            for e in vp.exemplars
+        ],
+        "enroll_count": vp.enroll_count,
+        "total_duration_sec": vp.total_duration_sec,
+        "quality_score": vp.quality_score,
+        "created_at": vp.created_at,
+        "exported_at": _now_iso(),
+    }
+
+
+def _export_envelope(request: Request, store, vp: Voiceprint, email: str) -> dict:
+    signer: ReceiptSigner = request.app.state.receipt_signer
+    envelope = signer.sign(_export_payload(store, vp))
+    store.log_usage(vp.workspace_id, vp.voiceprint_id, "export", email, "download")
+    return envelope
+
+
+@router.get("/v1/me/voiceprints/{workspace_id}/{voiceprint_id}/export")
+def export_one(
+    request: Request, workspace_id: str, voiceprint_id: str,
+    email: str = Depends(require_user),
+) -> dict:
+    """Download one of the caller's voiceprints as a signed envelope (owner-scoped)."""
+    store = request.app.state.store
+    vp = _owned_or_403(store, workspace_id, voiceprint_id, email)
+    return _export_envelope(request, store, vp, email)
+
+
+@router.get("/v1/me/voiceprints/export")
+def export_all(request: Request, email: str = Depends(require_user)) -> dict:
+    """Download ALL of the caller's voiceprints — a bundle of per-vp signed envelopes
+    (the primary "download my voiceprints" button; partial-restore friendly)."""
+    store = request.app.state.store
+    envelopes = []
+    for ws, vid in store.find_by_owner_email(email):
+        vp = store.get(ws, vid)
+        if vp is None:
+            continue
+        envelopes.append(_export_envelope(request, store, vp, email))
+    return {
+        "version": config.EXPORT_VERSION,
+        "exported_at": _now_iso(),
+        "count": len(envelopes),
+        "voiceprints": envelopes,
+    }
+
+
+def _decode_exemplars(payload: dict, dim: int) -> list[np.ndarray]:
+    """base64 float32 → list of (dim,) vectors. Raises ValueError on any bad/short vector."""
+    out = []
+    for b in payload.get("exemplars_b64", []):
+        v = np.frombuffer(base64.b64decode(b), dtype=np.float32)
+        if v.shape != (dim,):
+            raise ValueError("exemplar dim mismatch")
+        out.append(v.copy())
+    if not out:
+        raise ValueError("no exemplars")
+    return out
+
+
+def _import_one(store, signer: ReceiptSigner, session_email: str, envelope) -> tuple[dict | None, tuple[int, str] | None]:
+    """Verify + restore one envelope. Returns (result, None) on success or (None, (status, reason)).
+
+    Order is the security contract: signature FIRST (reject unsigned/foreign/tampered) →
+    embedder model/dim (hard-block cross-model) → ownership (session == file owner) → restore.
+    """
+    # 1. signature REQUIRED — rejects unsigned / foreign-key / tampered (verify_with_pubkey
+    #    never raises; a missing payload/signature returns False).
+    if not isinstance(envelope, dict) or "payload" not in envelope or not signer.verify(envelope):
+        return None, (400, "bad-signature")
+    p = envelope["payload"]
+    # 2. embedder model/dim must match the live store (mirror _check_meta's cross-model ban)
+    model, dim = _store_meta(store)
+    if p.get("embedder_model") != model or int(p.get("embedder_dim", -1)) != dim:
+        return None, (400, "wrong-model")
+    # 3. ownership — the session user must own the snapshot (owner_email is signature-covered)
+    if (p.get("owner_email") or "").lower() != session_email.lower():
+        return None, (403, "not-owner")
+    # 4. decode plaintext exemplars
+    try:
+        exemplars = _decode_exemplars(p, dim)
+    except (ValueError, binascii.Error):
+        return None, (400, "bad-exemplars")
+    ws, vid = p["workspace_id"], p["voiceprint_id"]
+    name = p.get("name") or ""
+    en, idn = bool(p.get("enroll_allowed", True)), bool(p.get("identify_allowed", True))
+    # 5. create-or-merge → recompute centroid → restore name + consent flags from the file
+    existing = store.get(ws, vid)
+    if existing is not None:
+        # Owner-scoped on BOTH sides: a validly-signed snapshot only proves you owned this
+        # voiceprint *at export time* — if its ownership has since moved on, refuse to merge
+        # into (and overwrite the name/flags of) someone else's current voiceprint.
+        if (existing.owner_email or "").lower() != session_email.lower():
+            return None, (403, "not-owner")
+        for e in exemplars:
+            existing.add_exemplar(e)          # eviction-aware (MAX_EXEMPLARS=20)
+        existing.recompute_centroid()
+        existing.name, existing.enroll_allowed, existing.identify_allowed = name, en, idn
+        store.upsert(existing)
+        status = "merged"
+    else:
+        vp = Voiceprint.from_exemplars(
+            vid, ws, exemplars, name=name, owner_email=session_email,
+            enroll_allowed=en, identify_allowed=idn,
+            enroll_count=int(p.get("enroll_count", 0) or 0),
+            total_duration_sec=float(p.get("total_duration_sec", 0.0) or 0.0),
+            quality_score=float(p.get("quality_score", 0.0) or 0.0),
+            created_at=p.get("created_at", "") or "",
+        )
+        store.upsert(vp)
+        status = "created"
+    # 6. audit — restores are ledgered so import can't be a silent backdoor around #1 deletion
+    store.log_usage(ws, vid, "import", session_email, "restore")
+    return {"voiceprint_id": vid, "workspace_id": ws, "status": status}, None
+
+
+@router.post("/v1/me/voiceprints/import")
+def import_voiceprints(
+    request: Request, body: dict = Body(...), email: str = Depends(require_user),
+) -> dict:
+    """Restore voiceprint(s) from a signed export — no audio, no embedder (distinct from
+    /v1/enroll). Accepts a single envelope `{payload, signature, ...}` or a bundle
+    `{voiceprints: [...]}`.
+
+    A single-envelope import surfaces a hard rejection as its HTTP status (400 bad-sig /
+    wrong-model, 403 not-owner); a bundle never fails the whole request for one bad item —
+    each item gets a per-result `status` (created / merged / rejected + reason) so a
+    partial restore still lands the good ones.
+    """
+    store = request.app.state.store
+    signer: ReceiptSigner = request.app.state.receipt_signer
+    if isinstance(body.get("voiceprints"), list):
+        envelopes, is_bundle = body["voiceprints"], True
+    elif "payload" in body:
+        envelopes, is_bundle = [body], False
+    else:
+        raise HTTPException(400, "expected a signed voiceprint envelope or {voiceprints:[...]} bundle")
+    if len(envelopes) > config.EXPORT_MAX_VOICEPRINTS:
+        raise HTTPException(413, f"import exceeds {config.EXPORT_MAX_VOICEPRINTS} voiceprints")
+
+    results = []
+    for env in envelopes:
+        res, err = _import_one(store, signer, email, env)
+        if err is not None and not is_bundle:
+            raise HTTPException(err[0], err[1])
+        if res is not None:
+            results.append(res)
+        else:
+            vid = (env.get("payload") or {}).get("voiceprint_id") if isinstance(env, dict) else None
+            results.append({"voiceprint_id": vid, "status": "rejected", "reason": err[1]})
+    imported = sum(1 for r in results if r["status"] in ("created", "merged"))
+    return {"imported": imported, "count": len(results), "results": results}
 
 
 # ── P4 trust handshake: confirm / deny a pending email binding (WS2) ──

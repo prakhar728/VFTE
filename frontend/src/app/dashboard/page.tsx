@@ -8,6 +8,7 @@ import { api, type Voiceprint } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { VoiceprintCard } from "@/components/voiceprint-card";
 import { PendingInbox } from "@/components/pending-inbox";
+import { ExportImportBar } from "@/components/export-import-bar";
 
 export default function DashboardPage() {
   const router = useRouter();
@@ -66,6 +67,11 @@ export default function DashboardPage() {
           anonymous, pause enrollment, or delete a voiceprint for good — enforced
           inside the enclave.
         </p>
+        <ExportImportBar
+          email={email}
+          hasVoiceprints={!!vps && vps.length > 0}
+          onImported={load}
+        />
       </div>
 
       <div className="mt-6 space-y-4">

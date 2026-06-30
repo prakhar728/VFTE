@@ -54,6 +54,55 @@ export type ReceiptKey = {
   in_tee: boolean;
 };
 
+/** A signed voiceprint export (Task #4) — one envelope, offline-verifiable + re-importable. */
+export type VoiceprintExportPayload = {
+  version: string;
+  voiceprint_id: string;
+  workspace_id: string;
+  owner_email: string;
+  name: string;
+  enroll_allowed: boolean;
+  identify_allowed: boolean;
+  embedder_model: string;
+  embedder_dim: number;
+  exemplars_b64: string[];
+  enroll_count: number;
+  total_duration_sec: number;
+  quality_score: number;
+  created_at: string;
+  exported_at: string;
+  alg: string;
+  key_id: string;
+};
+
+export type VoiceprintExport = {
+  payload: VoiceprintExportPayload;
+  signature: string;
+  alg: string;
+  key_id: string;
+};
+
+export type ExportBundle = {
+  version: string;
+  exported_at: string;
+  count: number;
+  voiceprints: VoiceprintExport[];
+};
+
+/** Per-item outcome of an import (created / merged, or rejected with a reason). */
+export type ImportResult = {
+  voiceprint_id: string | null;
+  workspace_id?: string;
+  status: "created" | "merged" | "rejected";
+  reason?: string;
+};
+
+export type ImportResponse = {
+  imported: number;
+  count: number;
+  results: ImportResult[];
+};
+
 export type Me = {
   email: string | null;
   signed_in: boolean;
@@ -117,6 +166,15 @@ export const api = {
     postJSON<{ deleted: boolean; receipt?: DeletionReceipt }>(
       `/v1/me/voiceprints/${encodeURIComponent(workspaceId)}/${encodeURIComponent(voiceprintId)}/forget`,
     ),
+
+  // Task #4: download a signed export of one / all voiceprints, and re-import a file.
+  exportVoiceprint: (workspaceId: string, voiceprintId: string) =>
+    getJSON<VoiceprintExport>(
+      `/v1/me/voiceprints/${encodeURIComponent(workspaceId)}/${encodeURIComponent(voiceprintId)}/export`,
+    ),
+  exportAll: () => getJSON<ExportBundle>("/v1/me/voiceprints/export"),
+  importVoiceprints: (body: VoiceprintExport | ExportBundle) =>
+    postJSON<ImportResponse>("/v1/me/voiceprints/import", body),
 
   // Task #1: published verification key + the user's issued deletion receipts.
   deletionReceiptKey: () => getJSON<ReceiptKey>("/v1/deletion-receipt-key"),

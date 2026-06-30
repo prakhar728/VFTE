@@ -6,6 +6,7 @@ import { Activity, Download, Fingerprint, ShieldCheck, ShieldQuestion, Trash2 } 
 import { api, type DeletionReceipt, type Voiceprint } from "@/lib/api";
 import { cn, fmtTime } from "@/lib/utils";
 import { downloadReceipt, verifyReceipt } from "@/lib/receipt";
+import { downloadJSON, exportFilename } from "@/lib/voiceprint-export";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
@@ -44,6 +45,20 @@ export function VoiceprintCard({
       onChanged();
     } catch {
       setNote("Couldn't save that — try again.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function exportVp() {
+    setBusy(true);
+    setNote(null);
+    try {
+      const env = await api.exportVoiceprint(vp.workspace_id, vp.voiceprint_id);
+      downloadJSON(exportFilename(env), env);
+      setNote("Signed export downloaded — re-import it any time to restore.");
+    } catch {
+      setNote("Export failed — try again.");
     } finally {
       setBusy(false);
     }
@@ -180,12 +195,18 @@ export function VoiceprintCard({
       {/* footer */}
       <div className="mt-4 flex items-center justify-between border-t border-border pt-4">
         <span className="text-xs text-muted-foreground">
-          {note ?? "Permanently delete this voiceprint from FPM."}
+          {note ?? "Download a signed backup, or permanently delete this voiceprint."}
         </span>
-        <Button variant="destructive" size="sm" disabled={busy} onClick={forget}>
-          <Trash2 className="size-3.5" />
-          Forget me
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button variant="outline" size="sm" disabled={busy} onClick={exportVp}>
+            <Download className="size-3.5" />
+            Export
+          </Button>
+          <Button variant="destructive" size="sm" disabled={busy} onClick={forget}>
+            <Trash2 className="size-3.5" />
+            Forget me
+          </Button>
+        </div>
       </div>
     </div>
   );

@@ -43,6 +43,25 @@ class Voiceprint:
     updated_at: str = ""
     last_seen_at: str = ""
 
+    # ── construction ─────────────────────────────────────────
+
+    @classmethod
+    def from_exemplars(
+        cls, voiceprint_id: str, workspace_id: str,
+        exemplars: list[np.ndarray], **kw,
+    ) -> "Voiceprint":
+        """Build a fresh voiceprint from plaintext exemplars (Task #4 import "create" path).
+
+        Adds each exemplar (eviction-aware, MAX_EXEMPLARS) then recomputes the centroid —
+        the centroid is *derived*, never trusted from an external file. Any of the scalar
+        fields (name, owner_email, enroll/identify_allowed, counts, timestamps) may be set
+        via `**kw`, mirroring the dataclass constructor."""
+        vp = cls(voiceprint_id, workspace_id, **kw)
+        for e in exemplars:
+            vp.add_exemplar(e)
+        vp.recompute_centroid()
+        return vp
+
     # ── exemplar / centroid maintenance ──────────────────────
 
     def add_exemplar(self, embedding: np.ndarray) -> None:

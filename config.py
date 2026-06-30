@@ -38,6 +38,16 @@ RECEIPT_KEY = os.environ.get("FPM_RECEIPT_KEY", "")
 # (would rotate the pubkey and orphan published key_ids).
 RECEIPT_SEAL_KEY_PATH = os.environ.get("FPM_RECEIPT_SEAL_KEY_PATH", "fpm/deletion-signing")
 
+# --- voiceprint export / import (Task #4: signed download / re-upload) ---
+# A user can download their voiceprint(s) to a signed, offline-verifiable file (vectors
+# in plaintext, signed for INTEGRITY with the Task #1 ed25519 key) and re-upload later —
+# a safety net so testing-stage DB wipes don't force a re-enroll from raw audio. Imports
+# REQUIRE our signature and a matching embedder model/dim (cross-model is hard-blocked).
+# `version` is the format tag, carried so passphrase-encryption can be added additively.
+EXPORT_VERSION = "fpm-voiceprint-export-v1"
+# Defensive cap on how many envelopes one import request may carry (a bundle restore).
+EXPORT_MAX_VOICEPRINTS = int(os.environ.get("FPM_EXPORT_MAX", "256"))
+
 # --- audio ---
 TARGET_SAMPLE_RATE = 16_000  # all internal processing is 16 kHz mono
 
