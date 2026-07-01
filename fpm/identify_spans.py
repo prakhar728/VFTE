@@ -63,7 +63,7 @@ def identified_dict(s: IdentifiedSegment) -> dict:
 
 
 def identify_spans(audio, workspace, spans, *, store, embedder, sample_rate=16_000,
-                   read_only=False, consumer="identify") -> list[IdentifiedSegment]:
+                   read_only=False, consumer="identify", meeting_id=None) -> list[IdentifiedSegment]:
     """Put identity on caller-supplied diarization spans → identified segments (vote-locked, relabeled).
 
     `spans` is an iterable of dicts `{start, end, local_speaker}` (or Segments). Returns the corrected
@@ -75,7 +75,8 @@ def identify_spans(audio, workspace, spans, *, store, embedder, sample_rate=16_0
             for s in spans]
     diarizer = SpanReplayDiarizer(segs)
     ident = SessionIdentifier(store, embedder, diarizer, workspace,
-                              sample_rate=sample_rate, consumer=consumer, read_only=read_only)
+                              sample_rate=sample_rate, consumer=consumer, read_only=read_only,
+                              meeting_id=meeting_id)
     ident.start()
     ident.feed(audio, sample_rate)
     ident.finish()

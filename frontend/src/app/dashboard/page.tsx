@@ -8,6 +8,7 @@ import { api, type Voiceprint } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { VoiceprintCard } from "@/components/voiceprint-card";
 import { PendingInbox } from "@/components/pending-inbox";
+import { RecognitionsInbox } from "@/components/recognitions-inbox";
 import { ExportImportBar } from "@/components/export-import-bar";
 
 export default function DashboardPage() {
@@ -57,6 +58,9 @@ export default function DashboardPage() {
 
       {/* P4 consent inbox — pending tags awaiting confirm/deny (hidden when none) */}
       <PendingInbox onResolved={load} />
+
+      {/* Task #3 Part (c): transparency inbox — where your voice was recognized (hidden when none) */}
+      <RecognitionsInbox />
 
       <div className="mt-8">
         <h1 className="text-2xl font-semibold tracking-tight">

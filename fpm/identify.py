@@ -76,6 +76,7 @@ class SessionIdentifier:
         lock_min_votes: int = LOCK_MIN_VOTES,
         consumer: str = "offline",
         read_only: bool = False,
+        meeting_id: str | None = None,
     ):
         self._store = store
         self._embedder = embedder
@@ -84,6 +85,9 @@ class SessionIdentifier:
         self._sr = sample_rate
         self._lock_min = lock_min_votes
         self._consumer = consumer
+        # Task #3 Part (c): meeting context for the usage-ledger identify row (append-only
+        # transparency), carried into the row's purpose when the caller supplies it.
+        self._meeting_id = meeting_id
         # P1: live (diart) path — classify + vote-lock in memory for stable session
         # labels, but mint nothing and write nothing to the store (single-writer: the
         # post pass is the sole authoritative writer). Default False = offline writer.
@@ -218,9 +222,14 @@ class SessionIdentifier:
             label = IdentifiedSegment(0, 0, spk, vp_id, None, "ANON", confidence)
         else:
             # WS4 ledger: a known speaker locking in IS a use of their voiceprint.
-            # P1 read-only writes nothing — skip the ledger row (still resolve for display).
-            if not self._read_only:
-                self._store.log_usage(self._ws, cand, "identify", self._consumer, "matched in meeting")
+            # Task #3 Part (c) — ALWAYS log the identify event, even in P1 read-only
+            # (consent-to-recognize ≠ consent-to-silence): the append-only ledger is the
+            # subject's audit trail of every time they were recognized. Read-only still
+            # mints/writes nothing ELSE (no voiceprint change) — only this ledger row.
+            purpose = "matched in meeting"
+            if self._meeting_id:
+                purpose += f" {self._meeting_id}"
+            self._store.log_usage(self._ws, cand, "identify", self._consumer, purpose)
             name = self._name_of(cand)
             # WS5: identify_allowed=False ⇒ "stay anonymous" — keep the cluster, drop the name.
             decision = "MATCH" if name is not None else "ANON"

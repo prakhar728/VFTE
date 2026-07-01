@@ -253,6 +253,7 @@ async def identify_spans_endpoint(
     workspace: str = Form(...),
     spans: str = Form(...),               # JSON: [{"start":..,"end":..,"local_speaker":".."}, ...]
     tag: str = Form("offline"),
+    meeting_id: str = Form(""),           # Task #3: meeting context for the usage-ledger row
     caller: Caller = Depends(require_scope("identify")),
 ):
     """Identity-only path (migration P5): the caller (capture) already diarized; VFTE just identifies.
@@ -282,7 +283,7 @@ async def identify_spans_endpoint(
     def stream():
         segs = identify_spans(audio, workspace, span_list, store=request.app.state.store,
                               embedder=embedder, sample_rate=sr, consumer=caller.name,
-                              read_only=(tag == "live"))
+                              read_only=(tag == "live"), meeting_id=(meeting_id or None))
         for s in segs:
             yield json.dumps(identified_dict(s)) + "\n"
         yield json.dumps({"type": "transcript",
@@ -346,6 +347,11 @@ class ProposeRequest(BaseModel):
     proposed_email: str
     proposed_by: str
     proposed_name: str = ""
+    # Task #3: representative clip locator {conclave_session_id, native_meeting_id, start, end}
+    # + context, so the subject can hear the segment before consenting. FPM stores the ref only.
+    clip_ref: dict | None = None
+    source: str = "tag"
+    confidence: float | None = None
 
 
 @app.post("/v1/propose", dependencies=[Depends(enforce_write_limit)])
@@ -368,7 +374,8 @@ async def propose_endpoint(
     if store.get(body.workspace, body.voiceprint_id) is None:
         raise HTTPException(404, f"voiceprint '{body.voiceprint_id}' not found in workspace '{body.workspace}'")
     p = store.propose(body.workspace, body.voiceprint_id, body.proposed_email,
-                      body.proposed_by, body.proposed_name)
+                      body.proposed_by, body.proposed_name,
+                      clip_ref=body.clip_ref, source=body.source, confidence=body.confidence)
     self_tag = body.proposed_by.strip().lower() == body.proposed_email.strip().lower()
     if p["status"] == "confirmed" or self_tag or config.CONSENT_AUTOCONFIRM:
         binding = store.confirm_proposal(p["proposal_id"], actor=p["proposed_email"])
@@ -385,6 +392,57 @@ async def propose_endpoint(
         log.warning("notify failed for proposal %s (pending stands)", p["proposal_id"], exc_info=True)
     return {"proposal_id": p["proposal_id"], "status": p["status"], "auto_confirmed": False,
             "voiceprint_id": body.voiceprint_id, "name": None, "owner_email": None}
+
+
+class RecognitionRequest(BaseModel):
+    workspace: str
+    voiceprint_id: str
+    native_meeting_id: str | None = None
+    app: str | None = None
+    meeting_title: str | None = None
+
+
+@app.post("/v1/recognitions", dependencies=[Depends(enforce_write_limit)])
+async def record_recognition_endpoint(
+    request: Request,
+    body: RecognitionRequest,
+    caller: Caller = Depends(require_scope("knowledge")),
+) -> dict:
+    """Task #3 Part (c): a *consented* voiceprint was auto-recognized in a meeting →
+    record it (always) and email the subject a transparency notice with a details link.
+
+    consent-to-recognize ≠ consent-to-silence: the subject is told **every time**. This is
+    metadata only — workspace/meeting/app/time — the transcript never crosses the boundary,
+    and the subject's email stays inside FPM (Conclave passes voiceprint_id, not an address).
+
+    No-op (recorded=False) when the voiceprint is unclaimed or opted out of identification —
+    those never carry a name-bearing notice (mirrors the /v1/identify anonymity gate).
+    """
+    if not caller.allows_workspace(body.workspace):
+        raise HTTPException(403, f"caller '{caller.name}' not authorized for workspace '{body.workspace}'")
+    store = request.app.state.store
+    vp = store.get(body.workspace, body.voiceprint_id)
+    if vp is None:
+        raise HTTPException(404, f"voiceprint '{body.voiceprint_id}' not found in workspace '{body.workspace}'")
+    # Only consented (claimed + identify-allowed) subjects get a name-bearing notice.
+    if not (vp.owner_email and vp.identify_allowed):
+        return {"recorded": False, "notified": False, "reason": "not-consented"}
+    rec = store.add_recognition(
+        body.workspace, body.voiceprint_id, vp.owner_email,
+        native_meeting_id=body.native_meeting_id, app=body.app,
+        meeting_title=body.meeting_title,
+    )
+    detail_url = f"{config.DASHBOARD_URL}?recognition={rec['recognition_id']}"
+    notified = False
+    try:
+        notified = notify.notify_recognition(
+            vp.owner_email, body.workspace, app=body.app,
+            meeting_title=body.meeting_title, when=rec["ts"], detail_url=detail_url,
+        )
+    except Exception:  # noqa: BLE001 — the record stands even if the email fails
+        log.warning("recognition notify failed for %s (record stands)", rec["recognition_id"],
+                    exc_info=True)
+    return {"recorded": True, "notified": notified, "recognition_id": rec["recognition_id"]}
 
 
 @app.get("/v1/consent/resolve/{workspace}/{voiceprint_id}")

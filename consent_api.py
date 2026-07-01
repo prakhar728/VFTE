@@ -12,8 +12,11 @@ from __future__ import annotations
 
 import base64
 import binascii
+import json
+import time
 from datetime import datetime, timezone
 from pathlib import Path
+from urllib.parse import urlencode
 
 import numpy as np
 from fastapi import APIRouter, Body, Depends, HTTPException, Request
@@ -460,3 +463,92 @@ def deny_proposal_endpoint(
     res = store.deny_proposal(body.proposal_id, actor=email)
     return {"proposal_id": body.proposal_id, "status": "denied",
             "voiceprint_id": res["voiceprint_id"]}
+
+
+# ── Task #3 Part (b): hear-the-clip capability ───────────────────────
+
+def _pack_capability(envelope: dict) -> str:
+    """URL-safe token carrying the signed capability envelope (base64url of its JSON)."""
+    raw = json.dumps(envelope, separators=(",", ":")).encode("utf-8")
+    return base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
+
+
+@router.post("/v1/me/proposals/{proposal_id}/clip-url")
+def proposal_clip_url(
+    request: Request, proposal_id: str, email: str = Depends(require_user),
+) -> dict:
+    """Mint a short-lived, signed URL the subject's browser uses to hear their clip.
+
+    Owner-scoped: only the tagged target may mint (reuses the proposal owner check). FPM
+    signs a capability `{purpose:'clip-cap', clip_ref, sub, exp}` with the Task #1 Ed25519
+    key; Conclave (which holds the audio) verifies the signature + expiry + clip_ref and
+    streams the [start,end] slice. **FPM never touches audio bytes** — it only points.
+    """
+    store = request.app.state.store
+    p = _target_proposal_or_error(store, proposal_id, email)  # 404/403 owner gate
+    clip_ref = p.get("clip_ref")
+    if not clip_ref:
+        raise HTTPException(404, "no clip attached to this proposal")
+    session_id = clip_ref.get("conclave_session_id") or clip_ref.get("native_meeting_id")
+    if not session_id:
+        raise HTTPException(422, "clip_ref missing a session id")
+    if not config.CONCLAVE_CLIP_BASE_URL:
+        raise HTTPException(503, "clip serving not configured (set FPM_CONCLAVE_CLIP_BASE_URL)")
+    signer: ReceiptSigner = request.app.state.receipt_signer
+    exp = int(time.time()) + config.CLIP_CAP_TTL_SEC
+    envelope = signer.sign({
+        "purpose": "clip-cap",
+        "clip_ref": clip_ref,
+        "sub": email.lower(),
+        "exp": exp,
+    })
+    cap = _pack_capability(envelope)
+    q = urlencode({"start": clip_ref.get("start", 0), "end": clip_ref.get("end", 0), "cap": cap})
+    base = config.CONCLAVE_CLIP_BASE_URL.rstrip("/")
+    url = f"{base}/api/transcripts/sessions/{session_id}/audio?{q}"
+    return {"url": url, "expires_at": exp, "key_id": signer.key_id}
+
+
+# ── Task #3 Part (c): recognition transparency inbox ─────────────────
+
+@router.get("/v1/me/recognitions")
+def my_recognitions(request: Request, email: str = Depends(require_user)) -> dict:
+    """The signed-in subject's transparency inbox: every time a voiceprint of theirs was
+    auto-recognized in a meeting (metadata only — never transcript content)."""
+    return {"email": email,
+            "recognitions": request.app.state.store.list_recognitions_for_email(email)}
+
+
+@router.get("/v1/me/recognitions/{recognition_id}")
+def recognition_detail(
+    request: Request, recognition_id: str, email: str = Depends(require_user),
+) -> dict:
+    """Recognition-detail: metadata + consent controls ONLY. Being recognized is NOT
+    membership — this endpoint deliberately returns NO transcript and grants no meeting
+    access. Owner-gated: only the subject whose voiceprint was recognized may view it.
+    """
+    store = request.app.state.store
+    rec = store.get_recognition(recognition_id)
+    if rec is None:
+        raise HTTPException(404, "recognition not found")
+    # Transcript-access guard: a recognition is metadata about *being identified*, not a
+    # grant to read the meeting. Only the owner sees even the metadata; NO transcript, ever.
+    if (rec.get("owner_email") or "").lower() != email.lower():
+        raise HTTPException(403, "not your recognition")
+    return {
+        "recognition": {
+            "recognition_id": rec["recognition_id"],
+            "workspace_id": rec["workspace_id"],
+            "voiceprint_id": rec["voiceprint_id"],
+            "native_meeting_id": rec.get("native_meeting_id"),
+            "app": rec.get("app"),
+            "meeting_title": rec.get("meeting_title"),
+            "ts": rec.get("ts"),
+        },
+        # Pointers the subject can act on — the same consent primitives as the dashboard.
+        "controls": {
+            "stay_anonymous": f"/v1/me/voiceprints/{rec['workspace_id']}/{rec['voiceprint_id']}/flags",
+            "forget": f"/v1/me/voiceprints/{rec['workspace_id']}/{rec['voiceprint_id']}/forget",
+        },
+        "transcript_access": False,  # explicit: recognition ≠ transcript access
+    }

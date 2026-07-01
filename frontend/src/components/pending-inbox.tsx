@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { Check, Inbox, X } from "lucide-react";
+import { Check, Inbox, Play, X } from "lucide-react";
 
 import { api, type Proposal } from "@/lib/api";
 import { Button } from "@/components/ui/button";
@@ -59,40 +59,105 @@ export function PendingInbox({ onResolved }: { onResolved: () => void }) {
 
       <ul className="mt-4 space-y-2.5">
         {items.map((p) => (
-          <li
+          <PendingCard
             key={p.proposal_id}
-            className="flex items-center justify-between gap-3 rounded-xl border border-border bg-card px-4 py-3"
-          >
-            <div className="min-w-0">
-              <p className="truncate text-sm font-medium">
-                {p.proposed_name || "(unnamed)"}
-              </p>
-              <p className="truncate text-xs text-muted-foreground">
-                tagged by {p.proposed_by} · workspace {p.workspace_id}
-              </p>
-            </div>
-            <div className="flex shrink-0 items-center gap-2">
-              <Button
-                size="sm"
-                onClick={() => act(p, "confirm")}
-                disabled={busy === p.proposal_id}
-              >
-                <Check className="size-3.5" />
-                Confirm
-              </Button>
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={() => act(p, "deny")}
-                disabled={busy === p.proposal_id}
-              >
-                <X className="size-3.5" />
-                Deny
-              </Button>
-            </div>
-          </li>
+            p={p}
+            busy={busy === p.proposal_id}
+            onAct={(kind) => act(p, kind)}
+          />
         ))}
       </ul>
     </section>
+  );
+}
+
+/**
+ * One pending proposal. When a `clip_ref` is attached (Task #3 Part b), a
+ * "Hear the clip" button mints a short-lived signed URL and streams it in an
+ * inline <audio> so the subject can listen *before* confirming or denying.
+ */
+function PendingCard({
+  p,
+  busy,
+  onAct,
+}: {
+  p: Proposal;
+  busy: boolean;
+  onAct: (kind: "confirm" | "deny") => void;
+}) {
+  const [clipUrl, setClipUrl] = useState<string | null>(null);
+  const [clipBusy, setClipBusy] = useState(false);
+  const [clipError, setClipError] = useState(false);
+
+  async function hearClip() {
+    setClipBusy(true);
+    setClipError(false);
+    try {
+      setClipUrl((await api.clipUrl(p.proposal_id)).url);
+    } catch {
+      setClipError(true);
+    } finally {
+      setClipBusy(false);
+    }
+  }
+
+  return (
+    <li className="rounded-xl border border-border bg-card px-4 py-3">
+      <div className="flex items-center justify-between gap-3">
+        <div className="min-w-0">
+          <p className="truncate text-sm font-medium">
+            {p.proposed_name || "(unnamed)"}
+          </p>
+          <p className="truncate text-xs text-muted-foreground">
+            tagged by {p.proposed_by} · workspace {p.workspace_id}
+          </p>
+        </div>
+        <div className="flex shrink-0 items-center gap-2">
+          <Button size="sm" onClick={() => onAct("confirm")} disabled={busy}>
+            <Check className="size-3.5" />
+            Confirm
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => onAct("deny")}
+            disabled={busy}
+          >
+            <X className="size-3.5" />
+            Deny
+          </Button>
+        </div>
+      </div>
+
+      {p.clip_ref ? (
+        <div className="mt-3 border-t border-border pt-3">
+          {clipUrl ? (
+            <audio
+              controls
+              autoPlay
+              src={clipUrl}
+              className="h-9 w-full"
+            />
+          ) : (
+            <div className="flex items-center gap-2.5">
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={hearClip}
+                disabled={clipBusy}
+              >
+                <Play className="size-3.5" />
+                {clipBusy ? "Loading…" : "Hear the clip"}
+              </Button>
+              <span className="text-xs text-muted-foreground">
+                {clipError
+                  ? "Couldn't load the clip — try again."
+                  : "Listen before you decide."}
+              </span>
+            </div>
+          )}
+        </div>
+      ) : null}
+    </li>
   );
 }

@@ -78,10 +78,30 @@ CREATE TABLE IF NOT EXISTS proposals(
   proposed_by    TEXT NOT NULL,
   proposed_name  TEXT NOT NULL DEFAULT '',
   status         TEXT NOT NULL DEFAULT 'pending',  -- pending | confirmed | denied
+  -- Task #3 (hear-the-clip): a representative segment the subject can play before
+  -- consenting. `clip_ref` is JSON {conclave_session_id, native_meeting_id, start, end}
+  -- (the LOCATOR only — FPM never stores audio bytes). source/confidence are context.
+  clip_ref   TEXT,
+  source     TEXT NOT NULL DEFAULT 'tag',
+  confidence REAL,
   created_at TEXT, confirmed_at TEXT, denied_at TEXT);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_proposal_unique
   ON proposals(workspace_id, voiceprint_id, proposed_email);
 CREATE INDEX IF NOT EXISTS idx_proposal_email ON proposals(proposed_email);
+-- Task #3 Part (c): auto-recognition transparency. consent-to-recognize ≠ consent-to-silence,
+-- so a *consented* speaker who is auto-recognized is recorded here (and emailed) every time.
+-- Metadata only — workspace/meeting/app/time — NEVER transcript content or audio.
+CREATE TABLE IF NOT EXISTS recognitions(
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  recognition_id TEXT NOT NULL UNIQUE,
+  workspace_id   TEXT NOT NULL,
+  voiceprint_id  TEXT NOT NULL,
+  owner_email    TEXT NOT NULL,
+  native_meeting_id TEXT,
+  app            TEXT,
+  meeting_title  TEXT,
+  ts             TEXT);
+CREATE INDEX IF NOT EXISTS idx_recognition_owner ON recognitions(owner_email);
 CREATE TABLE IF NOT EXISTS store_meta(key TEXT PRIMARY KEY, value TEXT);
 -- deletion receipts (Task #1): every signed "forget me" receipt we issue, append-only,
 -- so the dashboard can re-show a past receipt and we can prove issuance after the
@@ -95,10 +115,26 @@ CREATE TABLE IF NOT EXISTS deletion_receipts(
 CREATE INDEX IF NOT EXISTS idx_receipt_owner ON deletion_receipts(owner_email_hash);
 """
 
-# Column order for proposal-row reads → dict (the C4 wire shape).
+# Column order for proposal-row reads → dict (the C4 wire shape). clip_ref/source/
+# confidence (Task #3) trail the original columns so an ALTER-added table reads back
+# in this same order.
 _PROPOSAL_COLS = (
     "proposal_id", "workspace_id", "voiceprint_id", "proposed_email", "proposed_by",
-    "proposed_name", "status", "created_at", "confirmed_at", "denied_at",
+    "proposed_name", "status", "clip_ref", "source", "confidence",
+    "created_at", "confirmed_at", "denied_at",
+)
+
+# Columns added to `proposals` after it first shipped (Task #3) — ALTER on open so an
+# existing real DB gains them in place (CREATE IF NOT EXISTS never alters a live table).
+_PROPOSAL_MIGRATIONS = (
+    ("clip_ref", "TEXT"),
+    ("source", "TEXT NOT NULL DEFAULT 'tag'"),
+    ("confidence", "REAL"),
+)
+
+_RECOGNITION_COLS = (
+    "recognition_id", "workspace_id", "voiceprint_id", "owner_email",
+    "native_meeting_id", "app", "meeting_title", "ts",
 )
 
 # Columns added to `voiceprints` after the original A.5 schema shipped; applied via
@@ -121,6 +157,10 @@ def new_voiceprint_id() -> str:
 
 def new_proposal_id() -> str:
     return "prop_" + uuid.uuid4().hex[:16]
+
+
+def new_recognition_id() -> str:
+    return "rec_" + uuid.uuid4().hex[:16]
 
 
 class VoiceprintStore:
@@ -155,13 +195,18 @@ class VoiceprintStore:
         return self
 
     def _migrate(self) -> None:
-        """Add consent-plane columns to a pre-existing `voiceprints` table in place."""
+        """Add consent-plane columns to pre-existing tables in place."""
         have = {row[1] for row in self._conn.execute("PRAGMA table_info(voiceprints)")}
         for col, decl in _VP_MIGRATIONS:
             if col not in have:
                 self._conn.execute(f"ALTER TABLE voiceprints ADD COLUMN {col} {decl}")
         # index on owner_email only after the column is guaranteed to exist (post-ALTER)
         self._conn.execute("CREATE INDEX IF NOT EXISTS idx_vp_owner ON voiceprints(owner_email)")
+        # Task #3: clip_ref/source/confidence on an already-created proposals table.
+        have_p = {row[1] for row in self._conn.execute("PRAGMA table_info(proposals)")}
+        for col, decl in _PROPOSAL_MIGRATIONS:
+            if col not in have_p:
+                self._conn.execute(f"ALTER TABLE proposals ADD COLUMN {col} {decl}")
 
     def close(self) -> None:
         if self._conn:
@@ -419,7 +464,17 @@ class VoiceprintStore:
     # ── proposals (P4 trust handshake) ───────────────────────
 
     def _proposal_dict(self, row) -> dict:
-        return dict(zip(_PROPOSAL_COLS, row))
+        d = dict(zip(_PROPOSAL_COLS, row))
+        # clip_ref is stored as JSON text; hand callers the parsed object (or None).
+        raw = d.get("clip_ref")
+        if raw:
+            try:
+                d["clip_ref"] = json.loads(raw)
+            except (ValueError, TypeError):
+                d["clip_ref"] = None
+        else:
+            d["clip_ref"] = None
+        return d
 
     def get_proposal(self, proposal_id: str) -> dict | None:
         r = self._conn.execute(
@@ -431,16 +486,23 @@ class VoiceprintStore:
     def propose(
         self, workspace_id: str, voiceprint_id: str, proposed_email: str,
         proposed_by: str, proposed_name: str = "",
+        *, clip_ref: dict | None = None, source: str = "tag",
+        confidence: float | None = None,
     ) -> dict:
         """Create (or return the existing) pending email-binding proposal.
 
         Idempotent per (workspace, voiceprint, email): re-tagging the same person on the
         same voiceprint returns the original proposal unchanged (no duplicate row; the
-        original proposed_name/proposed_by are retained). `owner_email` binds only on
-        confirm (claim_owner+set_name), never here. Emails are stored lowercased.
+        original proposed_name/proposed_by/clip_ref are retained). `owner_email` binds only
+        on confirm (claim_owner+set_name), never here. Emails are stored lowercased.
+
+        `clip_ref` (Task #3) is a JSON-serializable locator {conclave_session_id,
+        native_meeting_id, start, end} — the subject's "is this you?" clip. Stored as JSON
+        text; NO audio bytes ever touch FPM.
         """
         email = proposed_email.lower()
         by = proposed_by.lower()
+        clip_json = json.dumps(clip_ref) if clip_ref is not None else None
         with self._lock:
             existing = self._conn.execute(
                 f"SELECT {', '.join(_PROPOSAL_COLS)} FROM proposals "
@@ -452,8 +514,10 @@ class VoiceprintStore:
             pid = new_proposal_id()
             self._conn.execute(
                 "INSERT INTO proposals (proposal_id, workspace_id, voiceprint_id, proposed_email,"
-                " proposed_by, proposed_name, status, created_at) VALUES (?,?,?,?,?,?,'pending',?)",
-                (pid, workspace_id, voiceprint_id, email, by, proposed_name, _now()),
+                " proposed_by, proposed_name, status, clip_ref, source, confidence, created_at)"
+                " VALUES (?,?,?,?,?,?,'pending',?,?,?,?)",
+                (pid, workspace_id, voiceprint_id, email, by, proposed_name,
+                 clip_json, source, confidence, _now()),
             )
             self._conn.commit()
             return self.get_proposal(pid)
@@ -517,11 +581,16 @@ class VoiceprintStore:
         """
         vp = self.get(workspace_id, voiceprint_id)
         if vp is None:
-            return {"name": None, "owner_email": None, "visibility": "unknown"}
+            return {"name": None, "owner_email": None, "visibility": "unknown", "consented": False}
         owner = vp.owner_email or None
         if not vp.identify_allowed or not vp.name:
-            return {"name": None, "owner_email": owner, "visibility": "anonymous"}
-        return {"name": vp.name, "owner_email": owner, "visibility": "named"}
+            return {"name": None, "owner_email": owner, "visibility": "anonymous", "consented": False}
+        # Task #3: `consented` = the subject has affirmatively CLAIMED this voiceprint
+        # (owner_email bound via enroll/confirm) AND allows identification. Only a consented
+        # voiceprint auto-applies its name (Part c); a named-but-unclaimed one is surfaced to
+        # the host as "Proposed" for a one-click confirm (Part a).
+        consented = bool(owner) and vp.identify_allowed
+        return {"name": vp.name, "owner_email": owner, "visibility": "named", "consented": consented}
 
     def list_pending_for_email(self, proposed_email: str) -> list[dict]:
         """All still-pending proposals tagged to an email (the consent inbox feed)."""
@@ -534,6 +603,50 @@ class VoiceprintStore:
                 (email,),
             )
         ]
+
+    # ── recognitions (Task #3 Part c — transparency inbox) ───
+
+    def add_recognition(
+        self, workspace_id: str, voiceprint_id: str, owner_email: str,
+        *, native_meeting_id: str | None = None, app: str | None = None,
+        meeting_title: str | None = None,
+    ) -> dict:
+        """Record that a consented voiceprint was auto-recognized in a meeting (metadata only).
+
+        Append-only — one row per recognition event, so the subject sees every time their
+        voice was identified. NEVER stores transcript content or audio. owner_email is stored
+        lowercased so the inbox join matches the session email.
+        """
+        rid = new_recognition_id()
+        row = (rid, workspace_id, voiceprint_id, (owner_email or "").lower(),
+               native_meeting_id, app, meeting_title, _now())
+        with self._lock:
+            self._conn.execute(
+                f"INSERT INTO recognitions ({', '.join(_RECOGNITION_COLS)}) "
+                "VALUES (?,?,?,?,?,?,?,?)",
+                row,
+            )
+            self._conn.commit()
+        return dict(zip(_RECOGNITION_COLS, row))
+
+    def list_recognitions_for_email(self, owner_email: str, limit: int = 200) -> list[dict]:
+        """All recognitions of the signed-in subject's voiceprints (newest first)."""
+        email = (owner_email or "").lower()
+        return [
+            dict(zip(_RECOGNITION_COLS, r))
+            for r in self._conn.execute(
+                f"SELECT {', '.join(_RECOGNITION_COLS)} FROM recognitions "
+                "WHERE owner_email=? ORDER BY id DESC LIMIT ?",
+                (email, limit),
+            )
+        ]
+
+    def get_recognition(self, recognition_id: str) -> dict | None:
+        r = self._conn.execute(
+            f"SELECT {', '.join(_RECOGNITION_COLS)} FROM recognitions WHERE recognition_id=?",
+            (recognition_id,),
+        ).fetchone()
+        return dict(zip(_RECOGNITION_COLS, r)) if r else None
 
     def log_usage(
         self, workspace_id: str, voiceprint_id: str, event: str,

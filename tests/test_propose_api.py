@@ -168,7 +168,8 @@ def test_consent_resolve_get_named(client):
     r = c.get(f"/v1/consent/resolve/ws1/{vid}", headers={"Authorization": f"Bearer {CONCLAVE}"})
     assert r.status_code == 200
     assert r.json() == {"voiceprint_id": vid, "name": "Alice",
-                        "owner_email": "alice@x.com", "visibility": "named"}
+                        "owner_email": "alice@x.com", "visibility": "named",
+                        "consented": True}  # Task #3: claimed owner ⇒ auto-apply
 
 
 def test_consent_resolve_anonymous_gate(client):

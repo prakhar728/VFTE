@@ -123,3 +123,10 @@ SMTP_USER = os.environ.get("FPM_SMTP_USER", "")
 SMTP_PASS = os.environ.get("FPM_SMTP_PASS", "")
 NOTIFY_FROM = os.environ.get("FPM_NOTIFY_FROM", "") or SMTP_USER
 DASHBOARD_URL = os.environ.get("FPM_DASHBOARD_URL", "http://localhost:8091/dashboard")
+
+# Task #3: Conclave base URL FPM builds "hear the clip" capability URLs against (the browser
+# then fetches the audio slice directly from Conclave — FPM never streams bytes). Empty →
+# clip-url minting 503s (safe default; set to Conclave's public origin in prod).
+CONCLAVE_CLIP_BASE_URL = os.environ.get("FPM_CONCLAVE_CLIP_BASE_URL", "")
+# TTL (seconds) of a signed clip capability — short so a leaked URL dies quickly.
+CLIP_CAP_TTL_SEC = int(os.environ.get("FPM_CLIP_CAP_TTL_SEC", "300"))

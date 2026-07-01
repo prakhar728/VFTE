@@ -170,7 +170,8 @@ def test_list_pending_for_email(store):
 def test_resolve_named(store):
     vid = _named(store, "ws1", "Alice", "alice@x.com")
     assert store.consent_resolve("ws1", vid) == {
-        "name": "Alice", "owner_email": "alice@x.com", "visibility": "named"}
+        "name": "Alice", "owner_email": "alice@x.com", "visibility": "named",
+        "consented": True}  # claimed owner + identify-allowed → auto-apply (Task #3 Part c)
 
 
 def test_resolve_anonymous_when_identify_blocked(store):
@@ -178,14 +179,15 @@ def test_resolve_anonymous_when_identify_blocked(store):
     r = store.consent_resolve("ws1", vid)
     assert r["name"] is None and r["visibility"] == "anonymous"
     assert r["owner_email"] == "alice@x.com"  # owner still bound; only the name is withheld
+    assert r["consented"] is False  # identify blocked ⇒ not consented (no name-notice)
 
 
 def test_resolve_unbound_name_null(store):
     vid = _anon(store)  # exists, no name, no owner
     assert store.consent_resolve("ws1", vid) == {
-        "name": None, "owner_email": None, "visibility": "anonymous"}
+        "name": None, "owner_email": None, "visibility": "anonymous", "consented": False}
 
 
 def test_resolve_unknown_vid(store):
     assert store.consent_resolve("ws1", "vp_nope") == {
-        "name": None, "owner_email": None, "visibility": "unknown"}
+        "name": None, "owner_email": None, "visibility": "unknown", "consented": False}

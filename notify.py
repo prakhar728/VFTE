@@ -37,6 +37,31 @@ def notify_identification(
     return _send(proposed_email, subject, body)
 
 
+def notify_recognition(
+    owner_email: str, workspace: str, *, app: str | None, meeting_title: str | None,
+    when: str, detail_url: str,
+) -> bool:
+    """Task #3 Part (c): tell a *consented* subject they were auto-recognized in a meeting.
+
+    consent-to-recognize ≠ consent-to-silence — this fires every time. Metadata only (where
+    + when + which app), a link to the recognition-detail page (consent controls, NOT the
+    transcript). Returns True if a mail was sent, False if log-only (flag off).
+    """
+    where = f'"{meeting_title}"' if meeting_title else f"a meeting in workspace {workspace}"
+    via = f" via {app}" if app else ""
+    subject = f"You were identified in {where}"
+    body = (
+        f"Your voice was recognized in {where} in workspace {workspace}{via} at {when}.\n\n"
+        f"View the details and manage your consent (stay anonymous / forget your voiceprint):\n"
+        f"{detail_url}\n\n"
+        f"Being recognized does not grant anyone access to the meeting transcript.\n"
+    )
+    if not config.NOTIFY_EMAIL:
+        log.info("recognition notify (log-only): to=%s subject=%r", owner_email, subject)
+        return False
+    return _send(owner_email, subject, body)
+
+
 def _send(to: str, subject: str, body: str) -> bool:
     """Send one notify email over SMTP (STARTTLS). Raises if the flag is on but SMTP isn't
     configured — fail loud rather than silently dropping a consent email."""

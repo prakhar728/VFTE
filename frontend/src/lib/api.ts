@@ -117,6 +117,42 @@ export type Proposal = {
   proposed_by: string;
   proposed_name: string;
   created_at: string;
+  // Task #3 Part (b): locator for the audio clip the subject can hear before consenting.
+  clip_ref?: {
+    conclave_session_id?: string;
+    native_meeting_id?: string;
+    start?: number;
+    end?: number;
+  } | null;
+};
+
+/** A short-lived, signed URL the browser can stream directly (audio/wav). */
+export type ClipUrl = {
+  url: string;
+  expires_at: number;
+  key_id: string;
+};
+
+/**
+ * Task #3 Part (c): a transparency record — one time a voiceprint of the
+ * signed-in subject was auto-recognized in a meeting. Metadata only; never
+ * carries transcript content.
+ */
+export type Recognition = {
+  recognition_id: string;
+  workspace_id: string;
+  voiceprint_id: string;
+  native_meeting_id: string | null;
+  app: string | null;
+  meeting_title: string | null;
+  ts: string | null;
+};
+
+/** Recognition detail — metadata + consent-control pointers. Deliberately NO transcript. */
+export type RecognitionDetail = {
+  recognition: Recognition;
+  controls: { stay_anonymous: string; forget: string };
+  transcript_access: false;
 };
 
 export class ApiError extends Error {
@@ -189,6 +225,18 @@ export const api = {
     postJSON<{ status: string }>("/v1/confirm", { proposal_id: proposalId }),
   deny: (proposalId: string) =>
     postJSON<{ status: string }>("/v1/deny", { proposal_id: proposalId }),
+
+  // Task #3 Part (b): mint a short-lived signed URL to hear a proposal's clip.
+  clipUrl: (proposalId: string) =>
+    postJSON<ClipUrl>(`/v1/me/proposals/${encodeURIComponent(proposalId)}/clip-url`),
+
+  // Task #3 Part (c): recognition transparency inbox (metadata only, no transcript).
+  recognitions: () =>
+    getJSON<{ email: string; recognitions: Recognition[] }>("/v1/me/recognitions"),
+  recognitionDetail: (recognitionId: string) =>
+    getJSON<RecognitionDetail>(
+      `/v1/me/recognitions/${encodeURIComponent(recognitionId)}`,
+    ),
 
   logout: () => postJSON<{ ok: boolean }>("/auth/logout"),
 };
